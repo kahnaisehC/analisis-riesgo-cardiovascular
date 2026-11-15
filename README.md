@@ -1,8 +1,12 @@
 # TP IAD 2026 — Decision Tree vs Random Forest
 
+[![Abrir en Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kahnaisehC/analisis-riesgo-cardiovascular/blob/main/TP_IAD_2026.ipynb)
+
 Trabajo Práctico de **Inteligencia Artificial para Datos** (UTN F.R.Re., 2026):
 pre-procesamiento del dataset *Framingham Heart Study* y comparación de
 **Decision Tree (C4.5)** y **Random Forest**, ambos implementados desde cero.
+
+Repositorio: <https://github.com/kahnaisehC/analisis-riesgo-cardiovascular>
 
 ## Archivos
 
@@ -26,6 +30,15 @@ pre-procesamiento del dataset *Framingham Heart Study* y comparación de
 | `results/` | Tablas CSV de cada experimento y `resumen.json`. |
 
 ## Cómo correrlo en Google Colab
+
+**Opción rápida (recomendada):** abrir el notebook directo desde el repositorio:
+
+<https://colab.research.google.com/github/kahnaisehC/analisis-riesgo-cardiovascular/blob/main/TP_IAD_2026.ipynb>
+
+Colab clona el repo en el entorno, así que los módulos y el CSV ya están en el
+directorio de trabajo. Sólo hay que hacer *Runtime → Run all*.
+
+**Opción manual:**
 
 1. Abrir <https://colab.research.google.com> → *Subir notebook* → `TP_IAD_2026.ipynb`.
 2. Subir al entorno de ejecución los cuatro módulos: `dt_rf.py`,

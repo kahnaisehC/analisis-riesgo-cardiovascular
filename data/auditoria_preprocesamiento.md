@@ -11,13 +11,13 @@
 
 | Columna | Valores imputados |
 |---|---:|
+| `education` | 87 |
 | `BPMeds (regla prevalentHyp=0)` | 25 |
 | `cigsPerDay` | 22 |
 | `totChol` | 38 |
 | `BMI` | 14 |
 | `heartRate` | 1 |
 | `glucose` | 304 |
-| `education` | 87 |
 | `BPMeds` | 19 |
 
 ## Outliers winsorizados (p1-p99)

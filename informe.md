@@ -44,8 +44,10 @@ Los requisitos del enunciado que se cumplen son:
 - entregar código documentado, el dataset procesado y este informe.
 
 Toda la implementación de los algoritmos está en `dt_rf.py` y usa **sólo NumPy**.
-scikit-learn se emplea exclusivamente para métricas, validación cruzada y como
-control de que las implementaciones propias son correctas.
+scikit-learn se emplea para métricas y validación cruzada. Los imputadores
+iterativo y KNN del pre-procesamiento también están implementados dentro del
+proyecto; no se usan modelos de árboles o bosques de scikit-learn para obtener
+los resultados principales.
 
 ### Entregables
 
@@ -54,9 +56,11 @@ control de que las implementaciones propias son correctas.
 | Notebook ejecutable en Colab | `TP_IAD_2026.ipynb` |
 | Notebook con salidas | `TP_IAD_2026_ejecutado.ipynb` |
 | Código fuente documentado | `dt_rf.py`, `preprocessing.py`, `experiments.py`, `plots.py`, `run_experiments.py`, `tune_final.py`, `finalize.py`, `make_figures.py` |
+| Pruebas de regresión | `tests/test_core.py` |
 | Dataset pre-procesado | `data/dataset_procesado.csv` |
 | Informe | `informe.md` (este documento) y `informe.pdf` |
-| Tablas y figuras | `results/*.csv`, `results/resumen.json`, `results/resumen_notebook.json`, `results/figuras/*.png` |
+| Generador del informe | `pdf_build/build_pdf.py` |
+| Tablas y figuras | `results/*.csv`, `results/resumen.json`, `results/resumen_notebook.json`, `results/protocolo.json`, `results/figuras/*.png` |
 
 ---
 
@@ -166,7 +170,7 @@ medicación"). Los otros 19 sí son faltantes genuinos.
 | Filas con nulos | **no eliminar** | borrar las 463 filas con algún nulo eliminaría 67 positivos (13 % de la clase minoritaria) y dejaría 2.927 registros |
 | `BPMeds` nulos con `prevalentHyp = 0` | imputar **0** por regla | el nulo es estructural: no toma medicación porque no es hipertenso |
 | Resto de `BPMeds` | imputar por **moda** | 19 casos, variable binaria |
-| Continuas (`cigsPerDay`, `totChol`, `BMI`, `heartRate`, `glucose`) | **MICE** (`IterativeImputer`) | preserva las correlaciones entre presión, colesterol, glucemia y BMI; imputar con la media rompería esa estructura |
+| Continuas (`cigsPerDay`, `totChol`, `BMI`, `heartRate`, `glucose`) | **MICE-style iterativo propio** | preserva las correlaciones entre presión, colesterol, glucemia y BMI; imputar con la media rompería esa estructura |
 | `education` | imputar por **moda** | ordinal de 4 niveles |
 | Outliers | **winsorizar p1–p99** | recorta la cola sin borrar registros ni destruir la relación con la clase |
 | `age`, `cigsPerDay` | **no winsorizar** | sus colas son información: los mayores y los fumadores empedernidos son la población de riesgo |
@@ -200,14 +204,14 @@ resto.
 
 | Columna | Imputados | Método |
 |---|---:|---|
-| `glucose` | 304 | MICE |
+| `glucose` | 304 | iterativo propio |
 | `education` | 87 | moda |
 | `BPMeds` (regla `prevalentHyp = 0`) | 25 | regla de negocio → 0 |
 | `BPMeds` (resto) | 19 | moda |
-| `totChol` | 38 | MICE |
-| `cigsPerDay` | 22 | MICE |
-| `BMI` | 14 | MICE |
-| `heartRate` | 1 | MICE |
+| `totChol` | 38 | iterativo propio |
+| `cigsPerDay` | 22 | iterativo propio |
+| `BMI` | 14 | iterativo propio |
+| `heartRate` | 1 | iterativo propio |
 
 **Outliers winsorizados (375 celdas, p1–p99):**
 
@@ -297,26 +301,27 @@ Implementado en la clase `RandomForest`:
 2. **Dtypes extendidos de pandas.** `Int64` (nullable) rompía
    `np.issubdtype`; se resolvió inspeccionando el dtype como texto.
 3. **Categorías no vistas y nulos en predicción.** Se agregó `_map_categories`,
-   que enruta valores desconocidos o faltantes a la rama mayoritaria del nodo.
-   Los nulos tampoco se usan para elegir el split durante el entrenamiento.
+   que enruta valores desconocidos o faltantes a una rama válida. Para datos
+   crudos, los splits numéricos incorporan los faltantes en la ganancia y los
+   enrutan de forma consistente; el pipeline final igualmente los imputa antes
+   de entrenar.
 4. **Gain ratio vs gain.** El *gain ratio* de C4.5 penaliza los splits muy
    balanceados por la entropía de la partición. En este dataset, con 15 % de
    positivos, tiende a elegir cortes que aíslan pocos casos y produce rankings
-   pobres (AUC 0,58 frente a 0,65 de *gain* y 0,68 de Gini). Se dejó
+   pobres (AUC 0,59 frente a 0,65 de *gain* y 0,65 de Gini). Se dejó
    `split_metric` configurable y se reporta el hallazgo; el modelo final usa
    Gini.
 5. **REP colapsa el árbol con validación chica y desbalanceada.** Con 20 % del
    train como validación, REP deja ~4 hojas y pierde AUC. La poda pesimista de
    C4.5, que no necesita datos extra, es un compromiso mejor. Ambas quedaron
    implementadas y medidas.
-6. **El umbral 0,5 es inútil con esta clase minoritaria.** El bosque casi nunca
-   supera 0,5 en probabilidad suave: en el hold-out predice 1 positivo de 153.
-   Se incorporó el análisis de umbral óptimo (`threshold_opt`, `f1_opt`) a todas
-   las evaluaciones.
-7. **Rendimiento.** Un árbol propio tarda ~0,07 s por fold (4–5× más que
-   sklearn, que está optimizado en Cython). El bosque de 300 árboles tarda
-   ~1,6 s por fold con `n_jobs=-1`. Para árboles chicos, joblib agrega overhead:
-   conviene paralelizar la validación cruzada antes que los árboles.
+6. **El umbral 0,5 es poco útil con esta clase minoritaria.** El bosque casi
+   nunca supera 0,5 en probabilidad suave. Se incorporó el análisis de umbral
+   aprendido en train (`threshold_opt`, `f1_opt`) a todas las evaluaciones.
+7. **Rendimiento.** La implementación propia es más lenta que los estimadores
+   optimizados de sklearn y el preprocesamiento dentro de cada fold agrega
+   costo, pero evita la fuga de información. Para árboles chicos, joblib agrega
+   overhead; para bosques grandes, `n_jobs=-1` reduce el tiempo total.
 8. **Etiquetado de sklearn.** `DecisionTreeClassifier` usa `criterion="gini"`
    por defecto; la primera corrida del *sanity check* comparó "entropía" contra
    gini sin avisar. Se corrigió pasando el criterio explícito.
@@ -332,8 +337,9 @@ El notebook `TP_IAD_2026.ipynb` incluye dos formas de correr pruebas:
   muestras por hoja, criterio, cantidad de árboles, `max_features`, tipo de voto
   y cantidad de folds. Un botón ejecuta la prueba y muestra la tabla.
 
-En Colab, si los módulos no están subidos, la primera celda los pide; si falta el
-CSV, la celda de carga lo pide. No hace falta instalar nada.
+En Colab, la primera celda descarga los módulos y el CSV que falten desde el
+commit fijado del repositorio. La subida manual sólo queda como respaldo ante
+falta de red. No hace falta instalar nada.
 
 ---
 
@@ -342,288 +348,236 @@ CSV, la celda de carga lo pide. No hace falta instalar nada.
 ### 5.1 Protocolo
 
 - **Validación cruzada estratificada 5-fold** (semilla 42) para las tablas de
-  ajuste y la comparación final.
+  ajuste y la comparación final. En cada fold el preprocesador se ajusta sólo
+  con el subconjunto de entrenamiento.
 - **Hold-out 70/30 estratificado** (semilla 42) para matrices de confusión,
-  curvas ROC/PR y análisis de umbral.
+  curvas ROC/PR y análisis de umbral. El preprocesador también se ajusta sólo
+  con el train del hold-out.
 - **Métricas:** accuracy, balanced accuracy, precision, recall, F1, ROC-AUC y
-  PR-AUC. Se agrega **F1 en el umbral óptimo** (`f1_opt`) y el umbral que lo
-  logra, porque el umbral 0,5 no es razonable con 15 % de positivos.
+  PR-AUC entendido como *average precision*. Se agrega **F1 en el umbral
+  óptimo** (`f1_opt`), con el umbral aprendido en train y aplicado al fold/test,
+  porque el umbral 0,5 no es razonable con 15 % de positivos.
 - **Línea base trivial:** 84,93 % de accuracy prediciendo siempre 0.
 
 ### 5.2 Validación de las implementaciones contra scikit-learn
 
-Hold-out 70/30, `max_depth = 6` para DT y `max_depth = 10`, 100 árboles para RF.
+Hold-out 70/30 con preprocesamiento ajustado sólo en train. Los árboles y el
+bosque propios se comparan con los estimadores de scikit-learn bajo la misma
+configuración. PR-AUC corresponde a *average precision*.
 
-| Modelo | Accuracy | F1@0,5 | ROC-AUC | PR-AUC | Tiempo (s) |
-|---|---:|---:|---:|---:|---:|
-| DT propio (entropía + gain ratio) | 0,8505 | 0,1461 | 0,6081 | 0,2211 | 0,067 |
-| DT propio (entropía + gain) | 0,8338 | 0,1333 | 0,6604 | 0,2508 | 0,115 |
-| DT propio (Gini) | 0,8407 | 0,1735 | 0,6641 | 0,2683 | 0,092 |
-| DT sklearn (entropy) | 0,8378 | 0,1361 | 0,6704 | 0,2572 | 0,008 |
-| DT sklearn (gini) | 0,8437 | 0,1675 | 0,6612 | 0,2746 | 0,007 |
-| **RF propio** | **0,8535** | 0,1183 | **0,7054** | **0,3414** | 2,777 |
-| RF sklearn | 0,8535 | 0,0859 | 0,7034 | 0,3331 | 0,199 |
+| Modelo | Accuracy | Balanced acc. | Precision | Recall | F1@0,5 | F1 train-thr. | Umbral | ROC-AUC | PR-AUC/AP | Tiempo (s) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DT propio (entropía, gain ratio) | 0,8476 | 0,5284 | 0,4583 | 0,0719 | 0,1243 | 0,3211 | 0,1921 | 0,6038 | 0,2329 | 0,059 |
+| DT propio (entropía, gain) | 0,8378 | 0,5199 | 0,3125 | 0,0654 | 0,1081 | 0,2055 | 0,2459 | 0,6414 | 0,2388 | 0,099 |
+| DT propio (gini) | 0,8387 | 0,5394 | 0,3778 | 0,1111 | 0,1717 | 0,3419 | 0,2405 | 0,6616 | 0,2570 | 0,081 |
+| DT sklearn (entropy) | 0,8358 | 0,5161 | 0,2812 | 0,0588 | 0,0973 | 0,2149 | 0,3333 | 0,6521 | 0,2353 | 0,015 |
+| DT sklearn (gini) | 0,8456 | 0,5434 | 0,4474 | 0,1111 | 0,1780 | 0,3462 | 0,2500 | 0,6636 | 0,2767 | 0,007 |
+| RF propio | 0,8496 | 0,5188 | 0,5000 | 0,0458 | 0,0838 | 0,3529 | 0,2388 | 0,7028 | 0,3419 | 1,441 |
+| RF sklearn | 0,8515 | 0,5254 | 0,5625 | 0,0588 | 0,1065 | 0,3425 | 0,2538 | 0,7054 | 0,3309 | 0,156 |
 
-Con la misma configuración, las implementaciones propias quedan a menos de un
-punto de AUC de sklearn:
-
-- DT Gini: 0,6641 vs 0,6612 (diferencia +0,003).
-- DT entropía + gain: 0,6604 vs 0,6704 (diferencia −0,010); sklearn no usa gain
-  ratio, usa *information gain*, por eso la comparación justa es con
-  `split_metric="gain"`.
-- RF: 0,7054 vs 0,7034 (+0,002) y misma accuracy; la diferencia de F1 se explica
-  por el umbral 0,5 y por el muestreo aleatorio de atributos.
-
-La implementación de **gain ratio** (C4.5 puro) queda por debajo porque en este
-dataset el criterio es inestable (ver 4.4 y 5.3). No es un error de
-implementación: es el comportamiento conocido de C4.5 en problemas con clase
-minoritaria chica.
-
-Las importancias de atributos también coinciden en los primeros puestos:
-`age`, `sysBP`, `glucose`, `pulsePressure` y `diaBP` aparecen en el top-5 de
-ambas implementaciones.
+La comparación sirve como control de implementación; los resultados principales
+usan exclusivamente `DecisionTree` y `RandomForest` propios.
 
 ### 5.3 Decision Tree: efecto de la profundidad
 
-CV 5-fold, Gini, sin poda.
+CV 5-fold, Gini, sin poda. El umbral de F1 se aprende en el train de cada fold.
 
-| max_depth | Accuracy | Balanced acc. | F1@0,5 | F1 ópt. | ROC-AUC | PR-AUC | Hojas |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 0,8493 | 0,5000 | 0,0000 | 0,3095 | 0,6003 | 0,1891 | 2,0 |
-| 2 | 0,8484 | 0,5035 | 0,0184 | 0,3297 | 0,6410 | 0,2159 | 4,0 |
-| 3 | 0,8454 | 0,5146 | 0,0716 | 0,3389 | 0,6715 | 0,2422 | 7,8 |
-| 4 | 0,8451 | 0,5322 | 0,1370 | 0,3558 | 0,6877 | 0,2671 | 15,2 |
-| **5** | 0,8386 | 0,5276 | 0,1317 | **0,3637** | **0,6956** | 0,2637 | 28,4 |
-| 6 | 0,8366 | 0,5360 | 0,1626 | 0,3543 | 0,6766 | 0,2513 | 48,0 |
-| 8 | 0,8283 | 0,5440 | 0,1939 | 0,3544 | 0,6447 | 0,2406 | 108,2 |
-| 10 | 0,8118 | 0,5592 | 0,2382 | 0,3204 | 0,6027 | 0,2207 | 190,4 |
-| 12 | 0,7879 | 0,5468 | 0,2226 | 0,2937 | 0,5718 | 0,1947 | 272,0 |
-| 16 | 0,7599 | 0,5480 | 0,2338 | 0,2644 | 0,5470 | 0,1726 | 389,4 |
-| 20 | 0,7522 | 0,5467 | 0,2343 | 0,2620 | 0,5473 | 0,1688 | 422,6 |
+| max_depth | Accuracy | Balanced acc. | F1@0,5 | F1 train-thr. | ROC-AUC | PR-AUC/AP | Hojas |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0,8493 ± 0,0007 | 0,5000 | 0,0000 | 0,3204 | 0,6115 ± 0,0159 | 0,1930 | 2,0 |
+| 2 | 0,8487 ± 0,0020 | 0,5117 | 0,0530 | 0,3367 | 0,6527 ± 0,0160 | 0,2221 | 4,0 |
+| 3 | 0,8487 ± 0,0022 | 0,5101 | 0,0463 | 0,3352 | 0,6690 ± 0,0197 | 0,2416 | 8,0 |
+| 4 | 0,8466 ± 0,0038 | 0,5218 | 0,0963 | 0,3277 | 0,6692 ± 0,0183 | 0,2605 | 15,0 |
+| 5 | 0,8413 ± 0,0064 | 0,5195 | 0,0976 | 0,3459 | 0,6683 ± 0,0284 | 0,2529 | 27,8 |
+| 6 | 0,8363 ± 0,0071 | 0,5310 | 0,1432 | 0,3323 | 0,6530 ± 0,0166 | 0,2448 | 49,0 |
+| 8 | 0,8257 ± 0,0089 | 0,5360 | 0,1717 | 0,2272 | 0,6104 ± 0,0381 | 0,2222 | 113,6 |
+| 10 | 0,8086 ± 0,0133 | 0,5380 | 0,1902 | 0,2146 | 0,5746 ± 0,0480 | 0,2029 | 197,0 |
+| 12 | 0,7917 ± 0,0201 | 0,5394 | 0,2049 | 0,2042 | 0,5557 ± 0,0614 | 0,1917 | 279,0 |
+| 16 | 0,7572 ± 0,0262 | 0,5327 | 0,2082 | 0,2119 | 0,5389 ± 0,0319 | 0,1695 | 397,6 |
+| 20 | 0,7540 ± 0,0228 | 0,5389 | 0,2213 | 0,2210 | 0,5410 ± 0,0283 | 0,1667 | 425,0 |
 
-El accuracy máxima se alcanza en árboles triviales (depth 1–2) porque predicen
-casi todo negativo. El **AUC máximo está en depth 5** (0,6956); a partir de ahí
-el árbol sobreajusta: la accuracy de test baja, el AUC cae y las hojas se
-multiplican. Es el compromiso sesgo-varianza clásico.
+El máximo ROC-AUC aparece en depth 4 (0,6692).
+La accuracy favorece árboles triviales por el desbalance; la profundidad mayor
+incrementa las hojas y termina degradando el ranking.
 
-`min_samples_leaf` (depth 8 fijo) tiene un efecto suave, con máximo en 40
-(AUC 0,6575) y muy poco spread (0,628–0,658): la profundidad es el
-hiperparámetro dominante.
+`min_samples_leaf` con depth 8:
+
+| min_samples_leaf | Accuracy | F1 train-thr. | ROC-AUC | Hojas |
+|---|---:|---:|---:|---:|
+| 1 | 0,8257 | 0,2272 | 0,6104 | 113,6 |
+| 2 | 0,8248 | 0,2303 | 0,6091 | 111,6 |
+| 5 | 0,8292 | 0,2728 | 0,6218 | 94,6 |
+| 10 | 0,8336 | 0,2757 | 0,6336 | 79,2 |
+| 20 | 0,8413 | 0,2955 | 0,6369 | 65,0 |
+| 40 | 0,8457 | 0,3150 | 0,6590 | 45,4 |
+| 80 | 0,8437 | 0,3194 | 0,6632 | 26,4 |
+
+El mejor AUC del barrido de hoja es 0,6632 con
+`min_samples_leaf = 80`; la profundidad sigue
+siendo el hiperparámetro dominante.
 
 ### 5.4 Decision Tree: criterio de impureza y métrica de split
 
 CV 5-fold, `max_depth = 6`.
 
-| Impureza | Métrica de split | Accuracy | F1 ópt. | ROC-AUC | Hojas |
-|---|---|---:|---:|---:|---:|
-| Entropía | **gain ratio** (C4.5) | 0,8469 | 0,2961 | 0,5813 | 21,6 |
-| Entropía | *information gain* | 0,8398 | 0,3428 | 0,6483 | 52,4 |
-| **Gini** | reducción de Gini | 0,8366 | **0,3543** | **0,6766** | 48,0 |
+| Impureza | Métrica de split | Accuracy | F1 train-thr. | ROC-AUC | Hojas |
+|---|---:|---:|---:|---:|---:|
+| Entropía | **gain ratio** (C4.5) | 0,8472 | 0,3020 | 0,5947 | 21,0 |
+| Entropía | *information gain* | 0,8372 | 0,3224 | 0,6542 | 53,0 |
+| **Gini** | reducción Gini | 0,8363 | 0,3323 | 0,6530 | 49,0 |
 
-La accuracy favorece al gain ratio (0,8469), pero su AUC es **nueve puntos
-menor**. El gain ratio divide la ganancia por la entropía de la partición y
-premia splits que separan pocos casos; esos cortes mejoran la exactitud
-aparente pero ordenan mal las probabilidades. Gini y gain son mejores para
-*ranking* (que es lo que miden ROC-AUC y PR-AUC). Este es uno de los hallazgos
-más interesantes del TP: **optimizar accuracy habría llevado a elegir el peor
-modelo para uso clínico**.
+El gain ratio sigue siendo una opción C4.5 válida, pero en este dataset Gini y
+information gain producen mejores rankings de riesgo. Por eso la configuración
+final usa Gini y se evalúa ROC-AUC, PR-AUC/AP y no sólo accuracy.
 
 ### 5.5 Decision Tree: poda
 
 CV 5-fold, Gini, `max_depth = 12`.
 
-| Poda | Accuracy | F1 ópt. | ROC-AUC | Hojas | Profundidad |
+| Poda | Accuracy | F1 train-thr. | ROC-AUC | Hojas | Profundidad |
 |---|---:|---:|---:|---:|---:|
-| Sin poda | 0,7879 | 0,2937 | 0,5718 | 272,0 | 12,0 |
-| Pesimista (C4.5) | 0,8115 | 0,3181 | 0,5982 | 161,8 | 12,0 |
-| **REP (20 % validación)** | **0,8428** | **0,3534** | **0,6406** | **22,6** | 9,6 |
+| sin poda | 0,7917 | 0,2042 | 0,5557 | 279,0 | 12,0 |
+| pesimista (C4.5) | 0,8142 | 0,2045 | 0,5774 | 163,8 | 12,0 |
+| REP | 0,8437 | 0,3439 | 0,6523 | 20,8 | 9,4 |
 
-Ambas técnicas de poda mejoran al árbol sin poda. REP es la que más reduce el
-tamaño (272 → 23 hojas) y la que mejor AUC logra, pero depende de un conjunto
-de validación: con folds chicos y 15 % de positivos, la poda puede ser agresiva
-y colapsar el árbol (se observó en configuraciones con `max_depth` alto y
-`min_samples_leaf = 5`, donde dejó 3,6 hojas). La poda pesimista es más estable
-pero conserva 162 hojas.
-
-Para la configuración final se eligió un árbol **poco profundo y sin poda**
-(depth 5): la poda no aporta cuando el árbol ya está regularizado por
-profundidad.
+La poda se ajusta usando únicamente el train de cada fold. REP dispone de una
+validación interna y puede ser agresiva con pocos positivos; la poda pesimista
+no necesita datos adicionales. Para el modelo final se mantiene depth 5, donde
+la regularización por profundidad ya limita la varianza.
 
 ### 5.6 Decision Tree: balanceo de clases
 
 CV 5-fold, Gini, `max_depth = 6`.
 
-| `class_weight` | Accuracy | Balanced acc. | Precision | Recall | F1 |
+| class_weight | Accuracy | Balanced acc. | Precision | Recall | F1 |
 |---|---:|---:|---:|---:|---:|
-| Sin balanceo | **0,8366** | 0,5360 | **0,3614** | 0,1056 | 0,1626 |
-| `balanced` | 0,6339 | **0,6300** | 0,2343 | **0,6243** | **0,3403** |
+| sin balanceo | 0,8363 | 0,5310 | 0,3465 | 0,0940 | 0,1432 |
+| balanced | 0,6383 | 0,6310 | 0,2375 | 0,6204 | 0,3423 |
 
-El balanceo multiplica por ~5,6 el peso de los positivos: el recall sube de 0,11
-a 0,62 y el F1 se duplica, a costa de 20 puntos de accuracy. La accuracy se
-derrumba porque el modelo ahora predice muchos más positivos. Es una decisión de
-negocio: en *screening* cardiovascular puede tener sentido priorizar recall; en
-este TP se reporta sin balanceo para comparar ambos algoritmos en igualdad de
-condiciones, y se deja la opción disponible en la interfaz.
+El balanceo aumenta recall y F1 a costa de accuracy. Se conserva la opción en
+la interfaz y se usa sin balanceo para la comparación principal.
 
 ### 5.7 Random Forest: cantidad de árboles
 
 CV 5-fold, Gini, `max_depth = 12`, `max_features = sqrt`.
 
-| Árboles | Accuracy | F1 ópt. | ROC-AUC | OOB accuracy | Tiempo/fold (s) |
-|---:|---:|---:|---:|---:|---:|
-| 10 | 0,8413 | 0,3534 | 0,6659 | 0,8173 | 0,34 |
-| 25 | 0,8475 | 0,3734 | 0,6821 | 0,8378 | 0,78 |
-| 50 | 0,8496 | 0,3801 | 0,6842 | 0,8445 | 1,47 |
-| 100 | 0,8481 | 0,3730 | 0,6891 | 0,8467 | 3,12 |
-| 200 | 0,8496 | 0,3779 | 0,6949 | 0,8489 | 6,03 |
-| **300** | 0,8501 | 0,3778 | **0,6952** | 0,8493 | 8,65 |
+| Árboles | Accuracy | F1 train-thr. | ROC-AUC | OOB accuracy | Tiempo/fold (s) |
+|---|---:|---:|---:|---:|---:|
+| 10 | 0,8386 | 0,2714 | 0,6613 | 0,8165 | 0,33 |
+| 25 | 0,8460 | 0,2994 | 0,6788 | 0,8360 | 0,69 |
+| 50 | 0,8469 | 0,2941 | 0,6855 | 0,8431 | 1,31 |
+| 100 | 0,8490 | 0,3024 | 0,6907 | 0,8458 | 2,55 |
+| 200 | 0,8490 | 0,3227 | 0,6945 | 0,8482 | 5,15 |
+| 300 | 0,8493 | 0,3195 | 0,6966 | 0,8493 | 7,88 |
 
-El AUC se estabiliza a partir de ~100 árboles y el OOB sigue de cerca a la
-accuracy de validación (diferencia < 0,2 puntos), lo que confirma que la
-estimación OOB es confiable. El costo crece linealmente; 300 árboles es el
-punto de rendimiento decreciente.
+El AUC y OOB se estabilizan al aumentar la cantidad de árboles, mientras que el
+costo crece. Se usa la configuración de 300 árboles para el modelo final.
 
 ### 5.8 Random Forest: `max_features`, profundidad y voto
 
-`max_features` (100 árboles, `max_depth = 12`):
+`max_features` con 100 árboles y depth 12:
 
-| max_features | Accuracy | F1 ópt. | ROC-AUC | OOB |
+| max_features | Accuracy | F1 train-thr. | ROC-AUC | OOB accuracy |
 |---|---:|---:|---:|---:|
-| sqrt | 0,8481 | 0,3730 | **0,6891** | 0,8467 |
-| log2 | 0,8481 | 0,3730 | **0,6891** | 0,8467 |
-| 0,3 | 0,8481 | 0,3730 | **0,6891** | 0,8467 |
-| 0,6 | 0,8466 | 0,3712 | 0,6831 | 0,8479 |
+| sqrt | 0,8490 | 0,3024 | 0,6907 | 0,8458 |
+| log2 | 0,8490 | 0,3024 | 0,6907 | 0,8458 |
+| 0,3 | 0,8490 | 0,3024 | 0,6907 | 0,8458 |
+| 0,6 | 0,8484 | 0,3159 | 0,6773 | 0,8469 |
 
-Con 16 atributos, `sqrt(16) = 4`, `log2(16) = 4` y `int(0,3 × 16) = 4`
-seleccionan exactamente la misma cantidad de variables por split, de ahí que
-las tres filas coincidan. `0,6` (9 atributos) es algo peor: más atributos por
-split reduce la diversidad entre árboles, que es justamente la fuente de la
-mejora del bosque.
+Profundidad con 100 árboles y `max_features = sqrt`:
 
-Profundidad (100 árboles, `max_features = sqrt`):
-
-| max_depth | Accuracy | F1 ópt. | ROC-AUC | OOB |
+| max_depth | Accuracy | F1 train-thr. | ROC-AUC | OOB accuracy |
 |---|---:|---:|---:|---:|
-| 3 | 0,8501 | 0,3829 | 0,7075 | 0,8499 |
-| **5** | 0,8501 | 0,3964 | **0,7134** | 0,8492 |
-| 8 | 0,8510 | 0,3946 | 0,7098 | 0,8496 |
-| 12 | 0,8481 | 0,3730 | 0,6891 | 0,8467 |
-| 20 | 0,8501 | 0,3628 | 0,6820 | 0,8436 |
-| Sin límite | 0,8487 | 0,3617 | 0,6751 | 0,8463 |
+| 3,0000 | 0,8499 | 0,3562 | 0,7081 | 0,8499 |
+| 5,0000 | 0,8499 | 0,3362 | 0,7149 | 0,8499 |
+| 8,0000 | 0,8513 | 0,3273 | 0,7066 | 0,8491 |
+| 12,0000 | 0,8490 | 0,3024 | 0,6907 | 0,8458 |
+| 20,0000 | 0,8540 | 0,0831 | 0,6850 | 0,8454 |
+| — | 0,8537 | 0,1070 | 0,6840 | 0,8450 |
 
-Como en el DT, la profundidad óptima es baja (5). El bosque limita el
-sobreajuste mejor que un árbol solo (AUC 0,713 vs 0,696), pero con este dataset
-la señal es débil y los árboles profundos sólo agregan ruido.
+Tipo de voto:
 
-Tipo de voto (100 árboles, `max_depth = 12`):
+| Voto | Accuracy | F1 train-thr. | ROC-AUC | OOB accuracy |
+|---|---:|---:|---:|---:|
+| soft | 0,8490 | 0,3024 | 0,6907 | 0,8458 |
+| hard | 0,8487 | 0,3112 | 0,6818 | 0,8468 |
 
-| Voto | Accuracy | F1 ópt. | ROC-AUC |
-|---|---:|---:|---:|
-| **Suave** | 0,8481 | **0,3730** | **0,6891** |
-| Duro | **0,8496** | 0,3632 | 0,6811 |
-
-El voto duro acierta apenas 0,15 puntos más pero ordena peor las probabilidades
-(AUC −0,8). El voto suave es preferible porque produce probabilidades continuas,
-necesarias para ROC/PR y para elegir umbral.
+El OOB respeta ahora el tipo de voto elegido: promedia probabilidades para voto
+suave y cuenta votos para voto duro.
 
 ### 5.9 Ablaciones de pre-procesamiento
 
-Cada configuración se evalúa con el pipeline ajustado **dentro de cada fold**
-(para no filtrar información del test). RF con 80 árboles, `max_depth = 10`,
-Gini.
+Cada configuración se evalúa con el pipeline ajustado dentro de cada fold
+(5-fold, sin fuga de información). RF con 80 árboles, `max_depth = 10`, Gini.
 
-| Configuración | Accuracy | F1 ópt. | ROC-AUC |
+| Configuración | Accuracy | F1 train-thr. | ROC-AUC |
 |---|---:|---:|---:|
-| MICE + winsor + `is_smoking` (base) | 0,8499 | 0,3941 | 0,6973 |
-| Mediana + winsor | 0,8504 | 0,3854 | 0,6953 |
-| KNN + winsor | 0,8490 | 0,3803 | 0,6979 |
-| MICE **sin** winsor | 0,8504 | 0,3860 | **0,7014** |
-| MICE + **sin** `is_smoking` | **0,8510** | 0,3814 | 0,7003 |
-| MICE **sin** `pulsePressure` | 0,8507 | 0,3847 | 0,6989 |
+| MICE + winsor + is_smoking (base) | 0,8478 | 0,3299 | 0,6969 |
+| mediana + winsor | 0,8496 | 0,3387 | 0,6989 |
+| KNN + winsor | 0,8496 | 0,3100 | 0,6929 |
+| MICE sin winsor | 0,8496 | 0,3330 | 0,6961 |
+| MICE + sin is_smoking | 0,8513 | 0,3303 | 0,6909 |
+| MICE sin pulsePressure | 0,8525 | 0,3018 | 0,6968 |
 
-Conclusiones de la ablación:
-
-- La elección del imputador (MICE vs mediana vs KNN) mueve el AUC apenas 0,26
-  puntos: el dataset es chico y los nulos, pocos. KNN y MICE quedan arriba,
-  la mediana un poco abajo.
-- **Winsorizar no mejora el AUC** (0,7014 sin winsor vs 0,6973 con winsor):
-  consistente con que los árboles son robustos a outliers. Se mantiene igual
-  porque reduce la influencia de valores extremos en las hojas y no cuesta nada.
-- Quitar `is_smoking` mejora 0,3 puntos de AUC: es redundante con `cigsPerDay`,
-  como se sospechaba, y el modelo pierde una variable que sólo agrega ruido. La
-  mejora es menor al desvío entre folds (~1,5 puntos), así que no es concluyente.
-- `pulsePressure` aporta poco en el bosque (0,6989 sin ella vs 0,6973 con ella),
-  aunque luego aparece tercera en importancia. Su valor es más interpretativo
-  que predictivo.
+Las diferencias entre imputadores, winsorización, `is_smoking` y
+`pulsePressure` deben interpretarse junto con el desvío entre folds. No se
+eligen decisiones por una diferencia pequeña de un solo experimento.
 
 ### 5.10 Búsqueda conjunta y configuración final
 
-Los barridos univariados eligen cada hiperparámetro por separado, pero
-`max_depth` y `min_samples_leaf` interactúan. Se hizo una grilla cruzada 5-fold:
+La grilla conjunta se evalúa con preprocesamiento dentro de cada fold. La
+selección se hace por ROC-AUC; por lo tanto, el valor de la grilla es un puntaje
+de selección y no una estimación final independiente.
 
-- **DT**: `max_depth` ∈ {3, 4, 5, 6, 8} × `min_samples_leaf` ∈ {1, 5, 10, 20, 40}
-  → 25 combinaciones, AUC entre 0,628 y **0,696**.
-  Mejor: `max_depth = 5`, `min_samples_leaf = 1`, Gini (AUC 0,6956).
-- **RF**: `max_depth` ∈ {3, 5, 8} × `max_features` ∈ {sqrt, 0,3, 0,6} con 100
-  árboles → 9 combinaciones, AUC entre 0,702 y **0,713**.
-  Mejor: `max_depth = 5`, `max_features = 0,3`, 300 árboles, Gini (AUC 0,7134
-  con 100 árboles; empata con `sqrt`, que con 16 atributos elige la misma
-  cantidad de variables por split).
+- DT: 25 combinaciones de `max_depth` y `min_samples_leaf`.
+- RF: 9 combinaciones de `max_depth` y `max_features`, con 100 árboles; la
+  cantidad de árboles se completa con el barrido correspondiente.
 
 Configuraciones finales:
 
 ```python
-DT: max_depth=5, min_samples_leaf=1, criterion="gini"
-RF: n_estimators=300, max_depth=5, max_features=0.3, criterion="gini"
+DT: max_depth=5, min_samples_leaf=40, criterion='gini'
+RF: n_estimators=300, max_depth=5, max_features='sqrt', criterion='gini'
 ```
 
 ### 5.11 Comparación final DT vs RF
 
+La grilla y los barridos se usan para seleccionar la configuración. La
+comparación independiente se realiza sobre el hold-out 70/30; la CV final se
+reporta como referencia de selección y estabilidad.
+
 **Validación cruzada 5-fold:**
 
-| Modelo | Accuracy | Balanced acc. | F1@0,5 | F1 ópt. | Umbral ópt. | ROC-AUC | PR-AUC | Tiempo/fold |
+| Modelo | Accuracy | Balanced acc. | F1@0,5 | F1 train-thr. | Umbral | ROC-AUC | PR-AUC/AP | Tiempo/fold |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| DT | 0,8386 ± 0,0031 | 0,5276 | 0,1317 | 0,3637 | 0,223 | 0,6956 ± 0,0221 | 0,2637 | 0,066 s |
-| **RF** | **0,8507 ± 0,0022** | 0,5081 | 0,0341 | **0,3970** | 0,204 | **0,7152 ± 0,0178** | **0,3285** | 1,690 s |
-
-El RF gana en accuracy (+1,2 puntos), ROC-AUC (+2,0) y PR-AUC (+6,5), y es más
-estable entre folds (desvío 0,0022 vs 0,0031 en accuracy). Cuesta ~26× más
-tiempo de entrenamiento.
+| DT | 0,8454 ± 0,0038 | 0,5211 | 0,0954 | 0,3493 | 0,2341 | 0,6820 ± 0,0204 | 0,2664 | 0,053 |
+| **RF** | 0,8504 ± 0,0008 | 0,5063 | 0,0267 | 0,3252 | 0,2469 | 0,7153 ± 0,0194 | 0,3294 | 1,301 |
 
 **Hold-out 70/30:**
 
-| Modelo | Accuracy | Balanced acc. | Precision | Recall | F1@0,5 | F1 ópt. | Umbral ópt. | ROC-AUC | PR-AUC |
+| Modelo | Accuracy | Balanced acc. | Precision | Recall | F1@0,5 | F1 train-thr. | Umbral | ROC-AUC | PR-AUC/AP |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DT | 0,8456 | 0,5246 | 0,4167 | 0,0654 | 0,1130 | 0,3492 | 0,167 | 0,6618 | 0,2707 |
-| **RF** | **0,8496** | 0,5027 | 0,5000 | 0,0065 | 0,0129 | **0,3977** | 0,208 | **0,7179** | **0,3379** |
+| DT | 0,8476 | 0,5446 | 0,4722 | 0,1111 | 0,1799 | 0,3406 | 0,2165 | 0,6728 | 0,2766 |
+| **RF** | 0,8496 | 0,5027 | 0,5000 | 0,0065 | 0,0129 | 0,3662 | 0,2415 | 0,7186 | 0,3350 |
 
-Matrices de confusión (umbral 0,5):
+Matrices de confusión con umbral 0,5:
 
 | Modelo | TN | FP | FN | TP |
 |---|---:|---:|---:|---:|
-| DT | 850 | 14 | 143 | 10 |
+| DT | 845 | 19 | 136 | 17 |
 | RF | 863 | 1 | 152 | 1 |
 
-El umbral 0,5 deja a ambos modelos casi sin positivos predichos: **el problema
-real no es el clasificador, es el punto de corte**. Con el umbral que maximiza
-F1:
+Matrices de confusión con el umbral aprendido en train:
 
-| Modelo | Umbral | TN | FP | FN | TP | Precision | Recall | F1 | Accuracy |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DT | 0,167 | 757 | 107 | 98 | 55 | 0,340 | 0,359 | 0,349 | 0,798 |
-| **RF** | 0,208 | 743 | 121 | 85 | 68 | 0,360 | **0,444** | **0,398** | 0,797 |
+| Modelo | Umbral | TN | FP | FN | TP | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| DT | 0,216 | 598 | 266 | 67 | 86 | 0,244 | 0,562 | 0,341 |
+| **RF** | 0,242 | 785 | 79 | 101 | 52 | 0,397 | 0,340 | 0,366 |
 
-Con umbral ~0,2, el RF detecta el **44 % de los pacientes que sí desarrollan la
-enfermedad** con una precisión del 36 %. Sigue siendo un modelo débil para uso
-clínico, pero es una mejora sustancial respecto de no detectar a nadie, y es la
-forma correcta de comparar los algoritmos.
-
-**Test de Wilcoxon** sobre las exactitudes de los 5 folds: estadístico 0,0,
-**p = 0,0625**. Con 5 folds el p mínimo alcanzable es exactamente 0,0625
-(2⁻⁴): no se puede rechazar la hipótesis nula al 5 %. La evidencia es
-**direccional** (RF gana en los 5 folds, de ahí el estadístico 0) pero no
-significativa con este tamaño de muestra. Se necesitarían más folds (10×5 CV
-repetida) para alcanzar significancia.
+El test de Wilcoxon sobre las exactitudes por fold produce estadístico
+0,000 y p = 0,1250. Como los folds de una
+CV se solapan, este contraste debe considerarse descriptivo y no una prueba de
+observaciones independientes.
 
 Figuras:
 
@@ -639,89 +593,61 @@ Figuras:
 
 | Atributo | DT | RF |
 |---|---:|---:|
-| `sysBP` | **0,2810** | 0,1381 |
-| `age` | 0,2015 | **0,1530** |
-| `glucose` | 0,1099 | 0,1099 |
-| `pulsePressure` | 0,0488 | 0,1217 |
-| `diaBP` | 0,0371 | 0,0909 |
-| `BMI` | 0,0542 | 0,0840 |
-| `totChol` | 0,0789 | 0,0695 |
-| `cigsPerDay` | 0,0409 | 0,0624 |
-| `heartRate` | 0,0384 | 0,0419 |
-| `sex` | 0,0745 | 0,0241 |
-| `education` | 0,0118 | 0,0294 |
-| `prevalentHyp` | 0,0000 | 0,0393 |
-| `BPMeds` | 0,0231 | 0,0067 |
-| `diabetes` | 0,0000 | 0,0163 |
-| `is_smoking` | 0,0000 | 0,0098 |
-| `prevalentStroke` | 0,0000 | 0,0031 |
+| age | 0,2103 | 0,1706 |
+| sysBP | 0,4173 | 0,1330 |
+| pulsePressure | 0,0000 | 0,1133 |
+| glucose | 0,0706 | 0,1045 |
+| diaBP | 0,0077 | 0,0891 |
+| totChol | 0,0495 | 0,0702 |
+| BMI | 0,0000 | 0,0700 |
+| cigsPerDay | 0,0263 | 0,0643 |
+| heartRate | 0,0030 | 0,0451 |
+| prevalentHyp | 0,0000 | 0,0396 |
+| education | 0,0983 | 0,0304 |
+| sex | 0,0764 | 0,0254 |
+| diabetes | 0,0000 | 0,0203 |
+| is_smoking | 0,0408 | 0,0128 |
+| BPMeds | 0,0000 | 0,0087 |
+| prevalentStroke | 0,0000 | 0,0028 |
 
-Ambos modelos coinciden en el núcleo: **presión arterial, edad y glucemia**.
-El DT concentra la importancia en pocas variables (top-3 = 59 %), mientras que
-el RF la reparte (top-3 = 41 %) porque cada árbol ve un subconjunto distinto de
-atributos. `pulsePressure` gana peso en el bosque porque aporta la diferencia
-entre sistólica y diastólica, que el árbol único no llega a explotar.
+Las importancias describen el modelo entrenado sobre el train del hold-out; no
+son una medida causal ni sustituyen una validación clínica.
 
 ![Importancia de atributos](results/figuras/importancias.png)
 
 ![Árbol final (primeros 3 niveles)](results/figuras/arbol_dt.png)
 
----
-
 ## 6. Conclusiones
 
-1. **El dataset es el factor dominante.** Con 15 % de positivos y 16 atributos,
-   la señal máxima alcanzable ronda AUC 0,72. Ningún ajuste de hiperparámetros
-   compensa la falta de variables (el Framingham original usa más factores y
-   modelos de regresión de Cox). Los resultados son coherentes con la literatura:
-   edad, presión sistólica, glucemia y tabaquismo son los predictores clásicos.
+1. **El desbalance domina la accuracy.** La línea base mayoritaria obtiene
+   84,93 %. Por eso la comparación se centra en ROC-AUC, PR-AUC/AP,
+   recall, F1 y balanced accuracy.
 
-2. **La accuracy es una métrica engañosa acá.** Un modelo constante obtiene
-   84,9 %. El DT de depth 1 obtiene 84,9 % y AUC 0,60; el RF final obtiene 85,0 %
-   y AUC 0,72. La diferencia real está en el ranking de probabilidades, no en la
-   exactitud. Reportar sólo accuracy habría llevado a conclusiones falsas.
+2. **El preprocesamiento no filtra información del test.** El dataset procesado
+   completo se entrega como artefacto, pero las métricas ajustan imputadores y
+   winsorización únicamente sobre cada train/fold. La transformación posterior
+   reutiliza los parámetros aprendidos y no vuelve a calcularlos con el test.
 
-3. **El umbral importa tanto como el modelo.** Con umbral 0,5, el RF predice 1
-   positivo de 153 y su F1 es 0,01. Con umbral 0,21, detecta 68 de 153 con
-   precisión 0,36 y F1 0,40. Cualquier uso real requiere calibrar el punto de
-   corte según el costo de los falsos negativos.
+3. **El umbral debe aprenderse fuera del test.** En el hold-out el umbral del RF
+   se aprende en train (0,242) y luego se aplica al test, donde alcanza
+   F1 = 0,3662. El umbral 0,5 sigue siendo inadecuado para esta clase
+   minoritaria.
 
-4. **RF supera a DT de forma consistente, pero modesta.** +1,2 puntos de
-   accuracy, +2,0 de AUC y +6,5 de PR-AUC en CV; +5,6 de AUC en el hold-out.
-   El bosque es más estable (menor desvío entre folds) y su OOB (0,8501) coincide
-   con la validación cruzada (0,8507), lo que da una estimación gratuita y
-   confiable del error. El precio es ~26× más tiempo de entrenamiento y la
-   pérdida de un árbol interpretable.
+4. **RF supera a DT en el protocolo seleccionado.** En CV, el RF obtiene
+   ROC-AUC 0,7153 frente a 0,6820 del DT. La
+   evaluación independiente debe leerse en conjunto con el hold-out y con la
+   incertidumbre entre folds, no como una garantía clínica.
 
-5. **El gain ratio de C4.5 no siempre gana.** Fue el criterio con mejor accuracy
-   y el peor AUC (0,581 vs 0,677 de Gini) a depth 6. El dataset tiene una clase
-   minoritaria chica y el gain ratio premia splits desbalanceados. Es una
-   decisión de diseño de C4.5 que no se adapta bien a este problema. La
-   implementación quedó configurable (`split_metric`) y se reporta el hallazgo.
+5. **La implementación es propia.** Los árboles, el bosque, los imputadores
+   iterativo/KNN y el cálculo OOB están implementados en el proyecto; scikit-
+   learn se utiliza para métricas y particiones estratificadas, además del
+   control comparativo.
 
-6. **La poda ayuda sólo si el árbol no está regularizado.** Con depth 12, REP
-   reduce 272 → 23 hojas y sube el AUC de 0,572 a 0,641. Con depth 5, la poda no
-   aporta: el límite de profundidad ya controla la varianza. Cuando se usa poda
-   REP, hay que cuidar el tamaño del conjunto de validación: con pocos datos y
-   desbalance, colapsa el árbol.
-
-7. **El pre-procesamiento correcto fue imputar, no borrar.** Eliminar las 463
-   filas con nulos habría costado 67 positivos. MICE, mediana y KNN dan
-   resultados casi idénticos en este dataset; winsorizar no cambia el AUC de los
-   árboles (son robustos a outliers), pero se mantiene porque acota valores
-   extremos en las hojas. La regla de negocio para `BPMeds` recuperó 25 casos
-   que de otro modo se habrían imputado mal.
-
-8. **Limitaciones y trabajo futuro.**
-   - El test de Wilcoxon con 5 folds no alcanza significancia (p = 0,0625, el
-     mínimo posible); conviene validación cruzada repetida (5×5).
-   - No se optimizó el umbral *dentro* de cada fold; el `f1_opt` del hold-out es
-     ligeramente optimista. Lo correcto sería elegir el umbral en validación y
-     aplicarlo en test.
-   - Se podría calibrar probabilidades (Platt/isotónica) para que el umbral 0,5
-     sea significativo.
-   - Probar `class_weight="balanced"` en el RF final y optimizar el umbral por
-     costo (matriz de costos) en lugar de F1.
+6. **Limitaciones.** La selección de hiperparámetros usa la misma CV que se
+   reporta como puntaje de selección; una evaluación anidada sería más estricta.
+   El Wilcoxon sobre folds solapados es descriptivo. Las probabilidades y el
+   rendimiento no deben interpretarse como herramienta clínica sin calibración,
+   validación externa y análisis de costos de falsos negativos.
 
 ---
 
@@ -731,8 +657,8 @@ entre sistólica y diastólica, que el árbol único no llega a explotar.
 
 1. Abrir el notebook directamente desde el repositorio:
    <https://colab.research.google.com/github/kahnaisehC/analisis-riesgo-cardiovascular/blob/main/TP_IAD_2026.ipynb>.
-2. Hacer *Runtime → Run all*. Colab clona el repositorio, así que los módulos y
-   el CSV ya están presentes.
+2. Hacer *Runtime → Run all*. La primera celda descarga desde GitHub los
+   módulos y el CSV que falten en el entorno.
 3. Si se sube solamente el `.ipynb`, la primera celda (`bootstrap`) descarga de
    GitHub —sólo si faltan— `dt_rf.py`, `preprocessing.py`, `experiments.py`,
    `plots.py` y `data_cardiovascular_risk.csv`. La subida manual queda como
@@ -740,10 +666,9 @@ entre sistólica y diastólica, que el árbol único no llega a explotar.
 4. La sección 12 tiene el panel interactivo con sliders.
 
 El bootstrap fija un `COMMIT` para descargar siempre la misma versión de los
-archivos. La validación cruzada fija la semilla por fold; el modelo final de
-hold-out del notebook no fija `random_state`, por lo que sus cifras pueden
-variar levemente entre ejecuciones (el informe reporta la corrida canónica de
-`run_experiments.py`).
+archivos. La validación cruzada, el hold-out y los modelos finales fijan la
+semilla; además, el preprocesamiento se ajusta dentro de cada fold o train
+split para evitar fuga de información.
 
 ### Local
 
@@ -776,3 +701,4 @@ jupyter notebook TP_IAD_2026.ipynb
 | `importancias.csv` | importancia por atributo |
 | `resumen.json` | todas las métricas puntuales del informe |
 | `resumen_notebook.json` | métricas exportadas por el notebook |
+| `protocolo.json` | semilla, folds y reglas de preprocesamiento/evaluación |

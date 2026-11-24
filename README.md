@@ -24,6 +24,7 @@ Repositorio: <https://github.com/kahnaisehC/analisis-riesgo-cardiovascular>
 | `tests/test_core.py` | Pruebas de regresión para imputación, `max_bins` y OOB hard voting. |
 | `informe.md` | Informe completo del trabajo (fuente). |
 | `informe.pdf` | Informe en PDF con tablas y figuras. |
+| `pdf_build/build_pdf.py` | Generador reproducible del PDF estilizado (requiere Pandoc, LibreOffice y `lxml`). |
 | `TP_IAD_2026_ejecutado.ipynb` | Notebook ya ejecutado de punta a punta (evidencia de la corrida). |
 | `data/dataset_procesado.csv` | Dataset limpio, imputado, codificado y con `pulsePressure`. |
 | `data/auditoria_inicial.md` | Informe del dataset antes del pre-procesamiento. |

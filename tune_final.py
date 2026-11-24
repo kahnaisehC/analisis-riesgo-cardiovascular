@@ -63,7 +63,7 @@ def grid_rf(df_raw) -> pd.DataFrame:
     for depth, mf in itertools.product([3, 5, 8], ["sqrt", 0.3, 0.6]):
         make = lambda d=depth, m=mf: RandomForest(
             n_estimators=100, max_depth=d, max_features=m,
-            criterion="gini", n_jobs=-1, random_state=SEED,
+            criterion="gini", n_jobs=1, random_state=SEED,
         )
         res = E.cross_validate_with_preprocessing(
             df_raw, TARGET, lambda: Preprocessor(), make, n_splits=CV

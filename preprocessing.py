@@ -35,6 +35,8 @@ Decisiones de limpieza (justificadas en el informe)
   nulo eliminaría 67 positivos de una clase que ya es minoritaria (15 %).
 * `BPMeds` tiene nulos estructurales: si `prevalentHyp == 0` el valor correcto
   es 0 (no toma medicación para la presión). Se imputa por regla y se reporta.
+* Las continuas usan una imputación iterativa estilo MICE o KNN implementada
+  en este módulo, sin reutilizar un imputador ajustado sobre el test.
 * Los outliers se **winsorizan** (recorte en percentiles) en lugar de
   eliminarse, porque muchos son valores clínicamente reales (glucosa 394,
   sysBP 295) que pertenecen justamente a la clase de riesgo.

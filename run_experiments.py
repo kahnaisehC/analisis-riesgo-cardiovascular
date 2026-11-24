@@ -59,6 +59,7 @@ def main():
         "preprocessing": "fit only on each training fold/train split",
         "threshold": "learned on train and applied to validation/test",
         "pr_auc": "average_precision",
+        "cv_role": "hyperparameter selection/stability; independent holdout for final comparison",
     }
 
     # ------------------------------------------------------------------

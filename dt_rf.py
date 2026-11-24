@@ -819,7 +819,8 @@ class DecisionTree:
                     for child in node.children
                 ) / total
                 gain = max(float(node.impurity) - child_impurity, 0.0)
-                imp[node.feature] += gain * (total / self._w_total)
+                if self._w_total > 0:
+                    imp[node.feature] += gain * (total / self._w_total)
             for child in node.children:
                 visit(child)
 

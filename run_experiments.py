@@ -15,6 +15,7 @@ Salidas
 - data/auditoria_preprocesamiento.md
 - results/*.csv  (una tabla por experimento)
 - results/resumen.json  (métricas puntuales usadas en el informe)
+- results/protocolo.json  (semillas y reglas de evaluación)
 """
 
 from __future__ import annotations
@@ -51,6 +52,14 @@ def main():
     os.makedirs("data", exist_ok=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
     summary: dict = {}
+    summary["protocol"] = {
+        "seed": SEED,
+        "cv_folds": CV,
+        "holdout_test_size": 0.30,
+        "preprocessing": "fit only on each training fold/train split",
+        "threshold": "learned on train and applied to validation/test",
+        "pr_auc": "average_precision",
+    }
 
     # ------------------------------------------------------------------
     # 1. Auditoría y pre-procesamiento
@@ -81,16 +90,28 @@ def main():
     }
     print("  ", summary["dataset"])
 
-    y = clean[TARGET].to_numpy()
-    X = clean.drop(columns=[TARGET])
+    # El CSV procesado completo se entrega como artefacto, pero no se usa
+    # para medir rendimiento: los parámetros de limpieza deben aprenderse
+    # sólo con el train de cada evaluación.
+    y = df_raw[TARGET].to_numpy()
 
     # ------------------------------------------------------------------
     # 2. Línea base: hold-out y comparación con scikit-learn
     # ------------------------------------------------------------------
     print("\n[2/7] Comparación contra scikit-learn")
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=0.3, random_state=SEED, stratify=y
+    raw_idx = np.arange(len(df_raw))
+    idx_tr, idx_te = train_test_split(
+        raw_idx, test_size=0.3, random_state=SEED, stratify=y
     )
+    prep_holdout = Preprocessor()
+    clean_tr = prep_holdout.fit_transform(
+        df_raw.iloc[idx_tr].reset_index(drop=True)
+    )
+    clean_te = prep_holdout.transform(
+        df_raw.iloc[idx_te].reset_index(drop=True)
+    )
+    X_tr, y_tr = clean_tr.drop(columns=[TARGET]), clean_tr[TARGET].to_numpy()
+    X_te, y_te = clean_te.drop(columns=[TARGET]), clean_te[TARGET].to_numpy()
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.tree import DecisionTreeClassifier
 
@@ -109,15 +130,25 @@ def main():
         model.fit(X_tr, y_tr)
         fit_time = time.perf_counter() - t0
         proba = model.predict_proba(X_te)[:, 1]
-        res = E.evaluate_predictions(y_te, proba, model.predict(X_te))
+        res = E.evaluate_with_train_threshold(
+            y_tr,
+            model.predict_proba(X_tr)[:, 1],
+            y_te,
+            proba,
+            pred_test=model.predict(X_te),
+        )
         res["tiempo (s)"] = round(fit_time, 3)
         base[name] = res
         payload[name] = proba
         print(f"  {name:36s} acc={res['accuracy']:.4f} auc={res['roc_auc']:.4f} "
               f"f1={res['f1']:.4f} t={fit_time:.2f}s")
     summary["sklearn_check"] = base
-    _save(pd.DataFrame(base).T.reset_index().rename(columns={"index": "modelo"}),
-          "comparacion_sklearn.csv")
+    base_table = pd.DataFrame([
+        {"modelo": name, **{metric: result[metric] for metric in E.METRICS},
+         "tiempo (s)": result["tiempo (s)"]}
+        for name, result in base.items()
+    ])
+    _save(base_table, "comparacion_sklearn.csv")
     np.save(os.path.join(RESULTS_DIR, "holdout_probas.npy"),
             {"y": y_te, "probas": payload}, allow_pickle=True)
 
@@ -125,14 +156,20 @@ def main():
     # 3. Barridos de Decision Tree
     # ------------------------------------------------------------------
     print("\n[3/7] Barridos de Decision Tree")
-    dt_fixed = {"criterion": "gini"}
+    prep_factory = lambda: Preprocessor()
+    dt_fixed = {"criterion": "gini", "random_state": SEED}
 
-    depth_df = E.sweep(E.make_dt, "max_depth", [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20],
-                       X, y, fixed=dt_fixed)
+    depth_df = E.sweep_with_preprocessing(
+        E.make_dt, "max_depth",
+        [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20],
+        df_raw, TARGET, prep_factory, fixed=dt_fixed,
+    )
     _save(depth_df, "dt_barrido_profundidad.csv")
 
-    leaf_df = E.sweep(E.make_dt, "min_samples_leaf", [1, 2, 5, 10, 20, 40, 80],
-                      X, y, fixed={**dt_fixed, "max_depth": 8})
+    leaf_df = E.sweep_with_preprocessing(
+        E.make_dt, "min_samples_leaf", [1, 2, 5, 10, 20, 40, 80],
+        df_raw, TARGET, prep_factory, fixed={**dt_fixed, "max_depth": 8},
+    )
     _save(leaf_df, "dt_barrido_min_hoja.csv")
 
     crit_rows = []
@@ -141,11 +178,13 @@ def main():
         ("entropy", "gain", "entropia + gain"),
         ("gini", None, "gini"),
     ]:
-        res = E.cross_validate(
+        res = E.cross_validate_with_preprocessing(
+            df_raw,
+            TARGET,
+            prep_factory,
             lambda c=criterion, sm=split_metric: DecisionTree(
-                max_depth=6, criterion=c, split_metric=sm
+                max_depth=6, criterion=c, split_metric=sm, random_state=SEED
             ),
-            X, y,
         )
         res["criterion"] = criterion
         res["split_metric"] = split_metric
@@ -156,8 +195,14 @@ def main():
     prune_rows = []
     for label, prune in [("sin poda", False), ("pesimista (C4.5)", "pessimistic"),
                          ("REP", "rep")]:
-        res = E.cross_validate(lambda: DecisionTree(max_depth=12, criterion="gini"),
-                              X, y, prune=prune, verbose=False)
+        res = E.cross_validate_with_preprocessing(
+            df_raw,
+            TARGET,
+            prep_factory,
+            lambda: DecisionTree(max_depth=12, criterion="gini", random_state=SEED),
+            prune=prune,
+            verbose=False,
+        )
         res["poda"] = label
         prune_rows.append(res)
         print(f"  poda {label:20s} acc={res['accuracy']:.4f} auc={res['roc_auc']:.4f} "
@@ -166,8 +211,14 @@ def main():
 
     weight_rows = []
     for label, cw in [("sin balanceo", None), ("balanced", "balanced")]:
-        res = E.cross_validate(
-            lambda: DecisionTree(max_depth=6, criterion="gini", class_weight=cw), X, y
+        res = E.cross_validate_with_preprocessing(
+            df_raw,
+            TARGET,
+            prep_factory,
+            lambda: DecisionTree(
+                max_depth=6, criterion="gini", class_weight=cw,
+                random_state=SEED
+            ),
         )
         res["class_weight"] = label
         weight_rows.append(res)
@@ -179,32 +230,38 @@ def main():
     # 4. Barridos de Random Forest
     # ------------------------------------------------------------------
     print("\n[4/7] Barridos de Random Forest")
-    trees_df = E.sweep(
+    trees_df = E.sweep_with_preprocessing(
         E.make_rf, "n_estimators", [10, 25, 50, 100, 200, 300],
-        X, y, fixed={"max_depth": 12, "criterion": "gini", "n_jobs": -1},
+        df_raw, TARGET, prep_factory,
+        fixed={"max_depth": 12, "criterion": "gini",
+               "n_jobs": -1, "random_state": SEED},
     )
     _save(trees_df, "rf_barrido_arboles.csv")
 
-    mf_df = E.sweep(
+    mf_df = E.sweep_with_preprocessing(
         E.make_rf, "max_features", ["sqrt", "log2", 0.3, 0.6],
-        X, y, fixed={"n_estimators": 100, "max_depth": 12, "criterion": "gini",
-                     "n_jobs": -1},
+        df_raw, TARGET, prep_factory,
+        fixed={"n_estimators": 100, "max_depth": 12, "criterion": "gini",
+               "n_jobs": -1, "random_state": SEED},
     )
     _save(mf_df, "rf_barrido_max_features.csv")
 
-    rfdepth_df = E.sweep(
+    rfdepth_df = E.sweep_with_preprocessing(
         E.make_rf, "max_depth", [3, 5, 8, 12, 20, None],
-        X, y, fixed={"n_estimators": 100, "max_features": "sqrt",
-                     "criterion": "gini", "n_jobs": -1},
+        df_raw, TARGET, prep_factory,
+        fixed={"n_estimators": 100, "max_features": "sqrt",
+               "criterion": "gini", "n_jobs": -1, "random_state": SEED},
     )
     _save(rfdepth_df, "rf_barrido_profundidad.csv")
 
     voting_rows = []
     for voting in ["soft", "hard"]:
-        res = E.cross_validate(
+        res = E.cross_validate_with_preprocessing(
+            df_raw,
+            TARGET,
+            prep_factory,
             lambda: RandomForest(n_estimators=100, max_depth=12, criterion="gini",
-                                 voting=voting, n_jobs=-1),
-            X, y,
+                                 voting=voting, n_jobs=-1, random_state=SEED),
         )
         res["voting"] = voting
         voting_rows.append(res)
@@ -227,7 +284,10 @@ def main():
     ]
 
     def rf_default():
-        return RandomForest(n_estimators=80, max_depth=10, criterion="gini", n_jobs=-1)
+        return RandomForest(
+            n_estimators=80, max_depth=10, criterion="gini",
+            n_jobs=-1, random_state=SEED
+        )
 
     ablation_rows = []
     for label, params in ablations:
@@ -250,6 +310,8 @@ def main():
     summary["final"] = {"baseline_mayoritaria": round(float((y == 0).mean()), 4)}
     with open(os.path.join(RESULTS_DIR, "resumen.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
+    with open(os.path.join(RESULTS_DIR, "protocolo.json"), "w", encoding="utf-8") as f:
+        json.dump(summary["protocol"], f, indent=2, ensure_ascii=False)
 
     import finalize
     import tune_final

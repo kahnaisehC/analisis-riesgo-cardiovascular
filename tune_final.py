@@ -3,7 +3,8 @@ tune_final.py
 =============
 
 Búsqueda conjunta (grid) de hiperparámetros para elegir la configuración final
-de DT y RF, en lugar de optimizar cada hiperparámetro por separado.
+de DT y RF, en lugar de optimizar cada hiperparámetro por separado. Cada fold
+ajusta su propio preprocesador sobre los datos de entrenamiento.
 
 Motivación: los barridos univariados eligen `max_depth` y `min_samples_leaf`
 de forma independiente, pero ambos interactúan (un árbol profundo con hojas
@@ -31,18 +32,22 @@ import pandas as pd
 
 import experiments as E
 from dt_rf import DecisionTree, RandomForest
+from preprocessing import Preprocessor, TARGET
 
 CV = 5
 SEED = 42
 
 
-def grid_dt(X, y) -> pd.DataFrame:
+def grid_dt(df_raw) -> pd.DataFrame:
     rows = []
     for depth, leaf in itertools.product([3, 4, 5, 6, 8], [1, 5, 10, 20, 40]):
         make = lambda d=depth, l=leaf: DecisionTree(
-            max_depth=d, min_samples_leaf=l, criterion="gini"
+            max_depth=d, min_samples_leaf=l, criterion="gini",
+            random_state=SEED,
         )
-        res = E.cross_validate(make, X, y, n_splits=CV)
+        res = E.cross_validate_with_preprocessing(
+            df_raw, TARGET, lambda: Preprocessor(), make, n_splits=CV
+        )
         rows.append(
             {"max_depth": depth, "min_samples_leaf": leaf,
              **{k: res[k] for k in ("accuracy", "f1_opt", "roc_auc", "pr_auc",
@@ -53,14 +58,16 @@ def grid_dt(X, y) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def grid_rf(X, y) -> pd.DataFrame:
+def grid_rf(df_raw) -> pd.DataFrame:
     rows = []
     for depth, mf in itertools.product([3, 5, 8], ["sqrt", 0.3, 0.6]):
         make = lambda d=depth, m=mf: RandomForest(
             n_estimators=100, max_depth=d, max_features=m,
-            criterion="gini", n_jobs=-1,
+            criterion="gini", n_jobs=-1, random_state=SEED,
         )
-        res = E.cross_validate(make, X, y, n_splits=CV)
+        res = E.cross_validate_with_preprocessing(
+            df_raw, TARGET, lambda: Preprocessor(), make, n_splits=CV
+        )
         rows.append(
             {"max_depth": depth, "max_features": str(mf),
              **{k: res[k] for k in ("accuracy", "f1_opt", "roc_auc", "pr_auc",
@@ -73,18 +80,16 @@ def grid_rf(X, y) -> pd.DataFrame:
 
 def main():
     t0 = time.time()
-    df = pd.read_csv("data/dataset_procesado.csv")
-    y = df["TenYearCHD"].to_numpy()
-    X = df.drop(columns=["TenYearCHD"])
+    df_raw = pd.read_csv("data_cardiovascular_risk.csv")
 
     print("Grilla DT")
-    dt_grid = grid_dt(X, y)
+    dt_grid = grid_dt(df_raw)
     dt_grid.to_csv("results/grilla_dt.csv", index=False)
     best_dt = dt_grid.loc[dt_grid["roc_auc"].idxmax()]
     print("  mejor:", dict(best_dt[["max_depth", "min_samples_leaf", "roc_auc"]]))
 
     print("Grilla RF (100 árboles)")
-    rf_grid = grid_rf(X, y)
+    rf_grid = grid_rf(df_raw)
     rf_grid.to_csv("results/grilla_rf.csv", index=False)
     best_rf = rf_grid.loc[rf_grid["roc_auc"].idxmax()]
     print("  mejor:", dict(best_rf[["max_depth", "max_features", "roc_auc"]]))

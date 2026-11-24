@@ -21,13 +21,14 @@ Repositorio: <https://github.com/kahnaisehC/analisis-riesgo-cardiovascular>
 | `tune_final.py` | Grilla cruzada de hiperparámetros (DT y RF) para elegir la configuración final. |
 | `finalize.py` | Entrena la configuración final, calcula CV, hold-out, Wilcoxon e importancias. |
 | `make_figures.py` | Genera las figuras del informe (ROC/PR, matrices de confusión, importancias, curvas de barridos) en `results/figuras/`. |
+| `tests/test_core.py` | Pruebas de regresión para imputación, `max_bins` y OOB hard voting. |
 | `informe.md` | Informe completo del trabajo (fuente). |
 | `informe.pdf` | Informe en PDF con tablas y figuras. |
 | `TP_IAD_2026_ejecutado.ipynb` | Notebook ya ejecutado de punta a punta (evidencia de la corrida). |
 | `data/dataset_procesado.csv` | Dataset limpio, imputado, codificado y con `pulsePressure`. |
 | `data/auditoria_inicial.md` | Informe del dataset antes del pre-procesamiento. |
 | `data/auditoria_preprocesamiento.md` | Informe del dataset después del pre-procesamiento. |
-| `results/` | Tablas CSV de cada experimento, `resumen.json` y `resumen_notebook.json`. |
+| `results/` | Tablas CSV de cada experimento, `resumen.json`, `resumen_notebook.json` y `protocolo.json`. |
 
 ## Cómo correrlo en Google Colab
 
@@ -35,8 +36,8 @@ Repositorio: <https://github.com/kahnaisehC/analisis-riesgo-cardiovascular>
 
 <https://colab.research.google.com/github/kahnaisehC/analisis-riesgo-cardiovascular/blob/main/TP_IAD_2026.ipynb>
 
-Colab clona el repo en el entorno, así que los módulos y el CSV ya están en el
-directorio de trabajo. Sólo hay que hacer *Runtime → Run all*.
+El notebook descarga desde GitHub los módulos y el CSV que falten en el
+entorno. Sólo hay que hacer *Runtime → Run all*.
 
 **Opción manual (subir solamente el notebook):**
 
@@ -56,8 +57,8 @@ módulos o el CSV, actualizar ese hash (o usar `main` para seguir siempre la
 
 Todo funciona con las bibliotecas que Colab trae por defecto
 (`numpy`, `pandas`, `matplotlib`, `scikit-learn`, `ipywidgets`). scikit-learn
-se usa **sólo** para métricas y como control de validación, no para los
-modelos.
+se usa para métricas y validación; los imputadores, DT y RF propios están
+implementados sin modelos de scikit-learn.
 
 ## Cómo correrlo localmente
 
@@ -67,11 +68,13 @@ python preprocessing.py            # genera data/dataset_procesado.csv + auditor
 python run_experiments.py          # reproduce las tablas del informe en results/
 python make_figures.py             # genera las figuras en results/figuras/
 jupyter notebook TP_IAD_2026.ipynb # o abrir el .ipynb en Colab
+python -m unittest discover -s tests -v
 ```
 
-`run_experiments.py` tarda unos 8 minutos en una laptop de 4 núcleos
-(la mayor parte, el barrido de Random Forest). Las semillas están fijas, así
-que las tablas se reproducen entre corridas.
+`run_experiments.py` tarda varios minutos en una laptop de 4 núcleos
+(la mayor parte, el barrido de Random Forest y el pre-procesamiento por fold).
+Las semillas están fijas y el pre-procesamiento se ajusta dentro de cada fold,
+así que las métricas se reproducen entre corridas.
 
 ## Uso rápido de los algoritmos
 

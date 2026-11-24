@@ -95,6 +95,122 @@ PLAUSIBLE_RANGES = {
 }
 
 
+class _NumpyIterativeImputer:
+    """Imputación iterativa determinista para variables continuas.
+
+    Es la versión mínima necesaria para este TP: ajusta una regresión lineal
+    por variable con faltantes, actualiza los valores faltantes y repite varias
+    rondas. No depende de scikit-learn y mantiene los modelos aprendidos para
+    aplicar exactamente los mismos parámetros en ``transform``.
+    """
+
+    def __init__(self, max_iter: int = 10):
+        self.max_iter = max_iter
+
+    def fit(self, X):
+        X = np.asarray(X, dtype=float)
+        self.n_features_in_ = X.shape[1]
+        self.medians_ = np.nanmedian(X, axis=0)
+        self.medians_ = np.where(np.isfinite(self.medians_), self.medians_, 0.0)
+        missing = np.isnan(X)
+        filled = np.where(missing, self.medians_, X)
+        self.models_ = []
+
+        for _ in range(self.max_iter):
+            for j in range(self.n_features_in_):
+                observed = ~missing[:, j]
+                features = [k for k in range(self.n_features_in_) if k != j]
+                if not observed.any() or not features:
+                    self.models_.append((j, features, None))
+                    continue
+                design = np.column_stack(
+                    [np.ones(observed.sum()), filled[observed][:, features]]
+                )
+                target = X[observed, j]
+                coef, *_ = np.linalg.lstsq(design, target, rcond=None)
+                self.models_.append((j, features, coef))
+                if missing[:, j].any():
+                    pred = np.column_stack(
+                        [np.ones(missing[:, j].sum()), filled[missing[:, j]][:, features]]
+                    ) @ coef
+                    filled[missing[:, j], j] = pred
+
+        # Sólo se necesita el último modelo de cada variable para transformar
+        # nuevos datos; conservar el último coeficiente evita una estructura
+        # dependiente del número de rondas.
+        latest = {}
+        for j, features, coef in self.models_:
+            latest[j] = (features, coef)
+        self.models_ = latest
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X, dtype=float)
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError("Cantidad de columnas incompatible con el imputador")
+        missing = np.isnan(X)
+        filled = np.where(missing, self.medians_, X)
+        for _ in range(self.max_iter):
+            for j, (features, coef) in self.models_.items():
+                if coef is None or not missing[:, j].any():
+                    continue
+                design = np.column_stack(
+                    [np.ones(missing[:, j].sum()), filled[missing[:, j]][:, features]]
+                )
+                filled[missing[:, j], j] = design @ coef
+        return filled
+
+
+class _NumpyKNNImputer:
+    """KNN imputer pequeño y determinista para las columnas continuas."""
+
+    def __init__(self, n_neighbors: int = 5):
+        self.n_neighbors = n_neighbors
+
+    def fit(self, X):
+        X = np.asarray(X, dtype=float)
+        self.X_train_ = X.copy()
+        self.medians_ = np.nanmedian(X, axis=0)
+        self.medians_ = np.where(np.isfinite(self.medians_), self.medians_, 0.0)
+        self.X_filled_ = np.where(np.isnan(X), self.medians_, X)
+        self.n_features_in_ = X.shape[1]
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X, dtype=float)
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError("Cantidad de columnas incompatible con el imputador")
+        out = X.copy()
+        missing = np.isnan(out)
+        out = np.where(missing, self.medians_, out)
+        for i in range(len(X)):
+            missing_cols = np.where(missing[i])[0]
+            if len(missing_cols) == 0:
+                continue
+            observed_cols = np.where(~missing[i])[0]
+            for j in missing_cols:
+                candidates = np.where(~np.isnan(self.X_train_[:, j]))[0]
+                if len(candidates) == 0:
+                    continue
+                if len(observed_cols):
+                    train_obs = ~np.isnan(self.X_train_[candidates][:, observed_cols]).any(axis=1)
+                    candidates = candidates[train_obs]
+                if len(candidates) == 0:
+                    continue
+                if len(observed_cols):
+                    deltas = self.X_train_[candidates][:, observed_cols] - out[i, observed_cols]
+                    distances = np.sqrt(np.mean(deltas * deltas, axis=1))
+                else:
+                    distances = np.zeros(len(candidates))
+                order = np.argsort(distances, kind="mergesort")
+                neighbors = candidates[order[: self.n_neighbors]]
+                values = self.X_train_[neighbors, j]
+                values = values[~np.isnan(values)]
+                if len(values):
+                    out[i, j] = values.mean()
+        return out
+
+
 # ---------------------------------------------------------------------------
 # Carga
 # ---------------------------------------------------------------------------
@@ -290,8 +406,10 @@ class Preprocessor:
     Parameters
     ----------
     imputer : {'mice', 'knn', 'median', 'mean'}, default='mice'
-        Estrategia para variables continuas. Las categóricas/ordinales usan la
-        moda (o la regla de negocio para `BPMeds`).
+        Estrategia para variables continuas. ``mice`` es una imputación
+        iterativa de regresión implementada con NumPy; ``knn`` también es
+        propio. Las categóricas/ordinales usan la moda (o la regla de negocio
+        para `BPMeds`).
     clip_outliers : bool, default=True
         Winsoriza las continuas en ``(clip_lower, clip_upper)``.
     clip_lower, clip_upper : float, default=0.01, 0.99
@@ -331,10 +449,13 @@ class Preprocessor:
     # Resultados del ajuste
     feature_names_: list = field(default_factory=list, init=False)
     report_: dict = field(default_factory=dict, init=False)
+    input_columns_: list = field(default_factory=list, init=False)
+    _continuous_imputer: object = field(default=None, init=False, repr=False)
+    _continuous_fill_values: dict = field(default_factory=dict, init=False, repr=False)
 
     # ------------------------------------------------------------------
     def fit(self, df: pd.DataFrame) -> "Preprocessor":
-        """Aprende parámetros (medianas, modas, percentiles) del dataset."""
+        """Aprende imputadores y parámetros (medianas, modas, percentiles)."""
         df = df.copy()
         self.report_ = {
             "filas_entrada": int(len(df)),
@@ -348,20 +469,48 @@ class Preprocessor:
 
         df = self._drop_columns(df, fit=True)
         df = self._coerce_types(df)
+        self.input_columns_ = list(df.columns)
 
         # Columnas con nulos
         self._na_cols = [c for c in df.columns if df[c].isna().any() and c != self.target]
 
-        # Parámetros de imputación
+        # Parámetros de imputación. Se aprenden para *todas* las columnas de
+        # entrada, no sólo para las que tienen nulos en train: un test/fold
+        # futuro puede tener un nulo en una columna que no lo tenía en train.
         self._impute_values = {}
-        for col in self._na_cols:
+        self._continuous_fill_values = {}
+        for col in df.columns:
+            if col == self.target:
+                continue
             if col in NUMERIC_COLS:
-                self._impute_values[col] = float(df[col].median())
+                median = float(df[col].median())
+                self._continuous_fill_values[col] = median
+                if self.imputer == "mean":
+                    self._impute_values[col] = float(df[col].mean())
+                else:
+                    self._impute_values[col] = median
             else:
                 mode = df[col].mode(dropna=True)
                 self._impute_values[col] = (
                     float(mode.iloc[0]) if len(mode) else np.nan
                 )
+
+        if self.imputer not in ("mice", "knn", "median", "mean"):
+            raise ValueError(f"imputer desconocido: {self.imputer!r}")
+
+        # Ajustar una sola vez el imputador continuo. transform() debe usar
+        # exactamente este objeto y jamás volver a aprender parámetros del
+        # conjunto de validación/test.
+        cont = [c for c in NUMERIC_COLS if c in df.columns]
+        self._continuous_imputer = None
+        if cont and self.imputer == "mice":
+            self._continuous_imputer = _NumpyIterativeImputer(max_iter=10).fit(
+                df[cont].to_numpy(dtype=float)
+            )
+        elif cont and self.imputer == "knn":
+            self._continuous_imputer = _NumpyKNNImputer(n_neighbors=5).fit(
+                df[cont].to_numpy(dtype=float)
+            )
 
         # Percentiles de winsorización (sólo continuas seleccionadas)
         self._clip_bounds = {}
@@ -401,6 +550,19 @@ class Preprocessor:
 
         df = self._drop_columns(df, fit=False)
         df = self._coerce_types(df)
+
+        missing_columns = [
+            c for c in self.input_columns_
+            if c != self.target and c not in df.columns
+        ]
+        if missing_columns:
+            raise ValueError(
+                "Faltan columnas aprendidas por el preprocesador: "
+                + ", ".join(missing_columns)
+            )
+        # Ignorar columnas extra y restaurar el orden aprendido evita que una
+        # columna accidental cambie silenciosamente la matriz de atributos.
+        df = df[[c for c in self.input_columns_ if c in df.columns]]
 
         if self.target in df.columns:
             before = len(df)
@@ -485,7 +647,20 @@ class Preprocessor:
 
     def _impute(self, df: pd.DataFrame, report: dict) -> pd.DataFrame:
         """Imputa nulos y registra cuántos valores tocó por columna."""
-        # 1) Regla de negocio: BPMeds = 0 si no hay hipertensión prevalente
+        # 1) Imputar primero las variables no continuas que pueden participar
+        # en la regla de BPMeds (en particular, prevalentHyp).
+        for col in df.columns:
+            if col == self.target or col in NUMERIC_COLS or col == "BPMeds":
+                continue
+            n_na = int(df[col].isna().sum())
+            if n_na:
+                fill = self._impute_values.get(col, np.nan)
+                if pd.isna(fill):
+                    raise ValueError(f"No hay valor de imputación aprendido para {col!r}")
+                df[col] = df[col].fillna(fill)
+                report["imputados"][col] = report["imputados"].get(col, 0) + n_na
+
+        # 2) Regla de negocio: BPMeds = 0 si no hay hipertensión prevalente
         if {"BPMeds", "prevalentHyp"} <= set(df.columns):
             rule = df["BPMeds"].isna() & (df["prevalentHyp"] == 0)
             n_rule = int(rule.sum())
@@ -493,50 +668,42 @@ class Preprocessor:
                 df.loc[rule, "BPMeds"] = 0
                 report["imputados"]["BPMeds (regla prevalentHyp=0)"] = n_rule
 
-        # 2) Columnas continuas: imputación elegida
-        cont = [c for c in self._na_cols if c in df.columns and c in NUMERIC_COLS]
+        # 3) Columnas continuas: aplicar el imputador ajustado en fit.
+        cont = [c for c in NUMERIC_COLS if c in df.columns]
         if cont and df[cont].isna().any().any():
             n_before = df[cont].isna().sum().to_dict()
-            if self.imputer == "mice":
-                from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-                from sklearn.impute import IterativeImputer
-
-                imp = IterativeImputer(
-                    max_iter=10, random_state=0, sample_posterior=False
-                )
-                df[cont] = imp.fit_transform(df[cont])
-            elif self.imputer == "knn":
-                from sklearn.impute import KNNImputer
-
-                imp = KNNImputer(n_neighbors=5)
-                df[cont] = imp.fit_transform(df[cont])
-            elif self.imputer in ("median", "mean"):
-                for col in cont:
-                    val = (
-                        df[col].median() if self.imputer == "median" else df[col].mean()
-                    )
-                    df[col] = df[col].fillna(val)
+            if self.imputer in ("mice", "knn"):
+                if self._continuous_imputer is None:
+                    raise RuntimeError("El imputador continuo no fue ajustado")
+                df[cont] = self._continuous_imputer.transform(df[cont])
             else:
-                raise ValueError(f"imputer desconocido: {self.imputer!r}")
+                for col in cont:
+                    val = self._impute_values[col]
+                    df[col] = df[col].fillna(val)
             for col in cont:
                 if n_before.get(col, 0):
                     report["imputados"][col] = int(n_before[col])
 
-        # 3) Resto de columnas (ordinales/binarias): moda o valor aprendido
-        rest = [c for c in self._na_cols if c in df.columns and c not in cont]
+        # 4) BPMeds y cualquier otra variable discreta restante: usar sólo
+        # valores aprendidos en train.
+        rest = [
+            c for c in df.columns
+            if c != self.target and c not in cont and df[c].isna().any()
+        ]
         for col in rest:
             n_na = int(df[col].isna().sum())
             if n_na:
-                df[col] = df[col].fillna(self._impute_values.get(col, 0))
-                report["imputados"][col] = report["imputados"].get(col, 0) + n_na
-
-        # 4) Cualquier nulo residual (p. ej. columna nueva)
-        for col in df.columns:
-            if col != self.target and df[col].isna().any():
-                n_na = int(df[col].isna().sum())
-                fill = self._impute_values.get(col, df[col].median())
+                fill = self._impute_values.get(col, np.nan)
+                if pd.isna(fill):
+                    raise ValueError(f"No hay valor de imputación aprendido para {col!r}")
                 df[col] = df[col].fillna(fill)
                 report["imputados"][col] = report["imputados"].get(col, 0) + n_na
+
+        # 5) No ocultar fugas con una estadística calculada sobre transform():
+        # cualquier nulo residual es un error del esquema/pipeline.
+        for col in df.columns:
+            if col != self.target and df[col].isna().any():
+                raise ValueError(f"No se pudo imputar la columna {col!r}")
 
         # Conversión final de enteros
         for col in BINARY_COLS + ORDINAL_COLS:

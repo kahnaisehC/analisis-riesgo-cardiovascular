@@ -371,6 +371,8 @@ class DecisionTree:
         self._impurity_decrease = np.zeros(self.n_features_in_, dtype=float)
         self._rng = np.random.default_rng(self.random_state)
         self._w_total = w.sum()
+        if self.max_bins is not None and int(self.max_bins) < 1:
+            raise ValueError("max_bins debe ser None o un entero positivo")
 
         idx = np.arange(len(y))
         self.tree_ = self._grow(X, y_idx, w, idx, depth=0)
@@ -436,10 +438,9 @@ class DecisionTree:
         # --- Condiciones de parada ---
         if (
             impurity == 0.0
-            or len(idx) < self.min_samples_split
             or total_w < self.min_samples_split
             or (self.max_depth is not None and depth >= self.max_depth)
-            or len(np.unique(y_node)) == 1
+            or np.count_nonzero(counts > 0) <= 1
         ):
             return node
 
@@ -533,7 +534,14 @@ class DecisionTree:
             if self._cat_mask[feature]:
                 found = self._best_categorical_split(col_v, y_v, w_v, parent_impurity)
             else:
-                found = self._best_numeric_split(col_v, y_v, w_v, parent_impurity)
+                found = self._best_numeric_split(
+                    col_v,
+                    y_v,
+                    w_v,
+                    parent_impurity,
+                    missing_y=y_idx[idx][nan_mask],
+                    missing_w=w_node[nan_mask],
+                )
             if found is None:
                 continue
             gain, score, extra = found
@@ -564,14 +572,16 @@ class DecisionTree:
             left_idx = idx[go_left]
             right_idx = idx[~go_left]
             if (
-                len(left_idx) < self.min_samples_leaf
-                or len(right_idx) < self.min_samples_leaf
+                w_node[go_left].sum() < self.min_samples_leaf
+                or w_node[~go_left].sum() < self.min_samples_leaf
             ):
                 return None
             return feature, True, threshold, None, gain, left_idx, right_idx
         return feature, False, None, extra, gain, None, None
 
-    def _best_numeric_split(self, col, y, w, parent_impurity):
+    def _best_numeric_split(
+        self, col, y, w, parent_impurity, missing_y=None, missing_w=None
+    ):
         """Mejor umbral ``<=`` para un atributo numérico (barrido ordenado)."""
         order = np.argsort(col, kind="mergesort")
         x_sorted = col[order]
@@ -582,26 +592,41 @@ class DecisionTree:
         onehot = np.zeros((len(y_sorted), self.n_classes_))
         onehot[np.arange(len(y_sorted)), y_sorted] = w_sorted
         cum = np.cumsum(onehot, axis=0)
-        total = cum[-1]
+        total_valid = cum[-1]
         left_w = cum.sum(axis=1)
+        if missing_y is None:
+            missing_y = np.empty(0, dtype=int)
+        if missing_w is None:
+            missing_w = np.empty(0, dtype=float)
+        missing_counts = np.bincount(
+            np.asarray(missing_y, dtype=int),
+            weights=np.asarray(missing_w, dtype=float),
+            minlength=self.n_classes_,
+        )
+        missing_total = float(missing_counts.sum())
+        total = total_valid + missing_counts
 
         # Sólo posiciones donde el valor cambia
         distinct = np.where(x_sorted[:-1] < x_sorted[1:])[0]
         if len(distinct) == 0:
             return None
 
-        # Reducción de candidatos por cuantiles si hay demasiados valores
+        # Reducción de candidatos por cuantiles si hay demasiados valores.
+        # No concatenar con ``distinct``: eso conservaría todos los
+        # candidatos y haría que max_bins no tuviera ningún efecto.
         if self.max_bins is not None and len(distinct) > self.max_bins:
-            quantiles = np.linspace(0, 1, self.max_bins + 1)[1:-1]
-            positions = np.searchsorted(left_w, np.quantile(left_w, quantiles))
-            positions = np.clip(positions, 0, len(x_sorted) - 2)
-            distinct = np.unique(np.concatenate([distinct, positions]))
+            quantiles = np.linspace(
+                0, 1, int(self.max_bins) + 2, dtype=float
+            )[1:-1]
+            positions = np.rint(quantiles * (len(distinct) - 1)).astype(int)
+            distinct = np.unique(distinct[positions])
             distinct = distinct[(x_sorted[distinct] < x_sorted[distinct + 1])]
 
-        left_counts = cum[distinct]
+        left_counts = cum[distinct] + missing_counts
         right_counts = total - left_counts
-        wl = left_w[distinct]
-        wr = total.sum() - wl
+        # Los faltantes se enrutan a la izquierda, igual que en la predicción.
+        wl = left_w[distinct] + missing_total
+        wr = total_valid.sum() - left_w[distinct]
         if np.any(wl <= 0) or np.any(wr <= 0):
             keep = (wl > 0) & (wr > 0)
             if not keep.any():
@@ -706,6 +731,7 @@ class DecisionTree:
         if method == "pessimistic":
             self._prune_pessimistic(cf)
             self._refresh(self.tree_, 0)
+            self._recompute_feature_importances()
             return self
         if method != "rep":
             raise ValueError("method debe ser 'rep' o 'pessimistic'")
@@ -770,6 +796,7 @@ class DecisionTree:
         post_order(self.tree_)
         # Recalcular profundidades/hojas
         self._refresh(self.tree_, 0)
+        self._recompute_feature_importances()
         return self
 
     def _refresh(self, node, depth):
@@ -777,6 +804,29 @@ class DecisionTree:
         if not node.is_leaf:
             for child in node.children:
                 self._refresh(child, depth + 1)
+
+    def _recompute_feature_importances(self):
+        """Recalcula las importancias después de modificar/podar el árbol."""
+        imp = np.zeros(self.n_features_in_, dtype=float)
+
+        def visit(node):
+            if node.is_leaf:
+                return
+            total = float(node.n_weight)
+            if total > 0:
+                child_impurity = sum(
+                    float(child.n_weight) * float(child.impurity)
+                    for child in node.children
+                ) / total
+                gain = max(float(node.impurity) - child_impurity, 0.0)
+                imp[node.feature] += gain * (total / self._w_total)
+            for child in node.children:
+                visit(child)
+
+        visit(self.tree_)
+        total = imp.sum()
+        self._impurity_decrease = imp
+        self.feature_importances_ = imp / total if total > 0 else imp
 
     @staticmethod
     def _binomial_upper(errors: float, n: float, cf: float) -> float:
@@ -1051,6 +1101,14 @@ class RandomForest:
             X = X.astype(object)
         y = np.asarray(y).ravel()
         n = len(y)
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        if X.shape[0] != n:
+            raise ValueError("X e y tienen distinto número de filas")
+        if self.n_estimators < 1:
+            raise ValueError("n_estimators debe ser un entero positivo")
+        if self.voting not in ("soft", "hard"):
+            raise ValueError("voting debe ser 'soft' o 'hard'")
         self.classes_, y_idx = np.unique(y, return_inverse=True)
         self.n_classes_ = len(self.classes_)
         self.n_features_in_ = X.shape[1]
@@ -1118,7 +1176,15 @@ class RandomForest:
         for tree, oob in zip(self.estimators_, self._oob_indices):
             if len(oob) == 0:
                 continue
-            proba_sum[oob] += tree.predict_proba(X[oob])
+            if self.voting == "hard":
+                votes = tree.predict(X[oob])
+                vote_idx = np.searchsorted(self.classes_, votes)
+                proba_sum[oob, vote_idx] += 1.0
+            else:
+                tree_proba = tree.predict_proba(X[oob])
+                for j, cls in enumerate(tree.classes_):
+                    global_j = int(np.searchsorted(self.classes_, cls))
+                    proba_sum[oob, global_j] += tree_proba[:, j]
             counts[oob] += 1
         has_pred = counts > 0
         self.oob_decision_function_ = np.full((n, self.n_classes_), np.nan)
@@ -1132,6 +1198,15 @@ class RandomForest:
         self.oob_score_ = float((pred == y_idx[has_pred]).mean())
 
     # -- Predicción --------------------------------------------------------
+    def _aligned_tree_proba(self, tree, X):
+        """Alinea las columnas de un árbol con ``self.classes_``."""
+        raw = tree.predict_proba(X)
+        out = np.zeros((len(X), self.n_classes_), dtype=float)
+        for j, cls in enumerate(tree.classes_):
+            global_j = int(np.searchsorted(self.classes_, cls))
+            out[:, global_j] = raw[:, j]
+        return out
+
     def predict_proba(self, X):
         X = np.asarray(X)
         if self.voting == "hard":
@@ -1143,7 +1218,9 @@ class RandomForest:
             for j, cls in enumerate(self.classes_):
                 proba[:, j] = (votes == cls).mean(axis=0)
             return proba
-        return np.mean([t.predict_proba(X) for t in self.estimators_], axis=0)
+        return np.mean(
+            [self._aligned_tree_proba(t, X) for t in self.estimators_], axis=0
+        )
 
     def predict(self, X):
         if self.voting == "soft":

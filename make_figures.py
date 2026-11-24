@@ -23,6 +23,7 @@ import pandas as pd
 import experiments as E
 from dt_rf import DecisionTree, RandomForest
 from plots import plot_confusion_matrix, plot_curve, plot_importances, plot_roc_pr
+from preprocessing import Preprocessor, TARGET
 
 OUT = "results/figuras"
 
@@ -100,14 +101,19 @@ def main():
     from plots import draw_tree
     from sklearn.model_selection import train_test_split
 
-    df = pd.read_csv("data/dataset_procesado.csv")
-    X = df.drop(columns=["TenYearCHD"])
-    y = df["TenYearCHD"].to_numpy()
-    X_tr, _, y_tr, _ = train_test_split(X, y, test_size=0.3, random_state=42,
-                                        stratify=y)
+    df_raw = pd.read_csv("data_cardiovascular_risk.csv")
+    y = df_raw[TARGET].to_numpy()
+    raw_idx = np.arange(len(df_raw))
+    idx_tr, _ = train_test_split(
+        raw_idx, test_size=0.3, random_state=42, stratify=y
+    )
+    prep = Preprocessor()
+    clean_tr = prep.fit_transform(df_raw.iloc[idx_tr].reset_index(drop=True))
+    X_tr = clean_tr.drop(columns=[TARGET])
+    y_tr = clean_tr[TARGET].to_numpy()
     cfg = resumen["final"]["config_dt"]
     arbol = DecisionTree(**cfg).fit(X_tr, y_tr)
-    fig, _ = draw_tree(arbol, list(X.columns), max_depth=3, figsize=(14, 7))
+    fig, _ = draw_tree(arbol, list(X_tr.columns), max_depth=3, figsize=(14, 7))
     fig.savefig(os.path.join(OUT, "arbol_dt.png"), dpi=150, bbox_inches="tight")
     plt.close(fig)
 

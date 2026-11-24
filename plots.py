@@ -23,9 +23,15 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch
 
 try:  # sklearn sólo se usa para las curvas, no para los modelos
-    from sklearn.metrics import roc_curve, precision_recall_curve, auc
+    from sklearn.metrics import (
+        roc_curve,
+        precision_recall_curve,
+        auc,
+        average_precision_score,
+    )
 except Exception:  # pragma: no cover
     roc_curve = None
+    average_precision_score = None
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +231,8 @@ def plot_roc_pr(y_true, models, axs=None, title_suffix=""):
         fpr, tpr, _ = roc_curve(y_true, proba)
         axs[0].plot(fpr, tpr, label=f"{name} (AUC={auc(fpr, tpr):.3f})")
         prec, rec, _ = precision_recall_curve(y_true, proba)
-        axs[1].plot(rec, prec, label=f"{name} (AUC={auc(rec, prec):.3f})")
+        ap = average_precision_score(y_true, proba)
+        axs[1].plot(rec, prec, label=f"{name} (AP={ap:.3f})")
 
     axs[0].plot([0, 1], [0, 1], "--", color="gray", linewidth=0.8)
     axs[0].set_xlabel("Tasa de falsos positivos")

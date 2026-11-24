@@ -1,0 +1,132 @@
+{
+  "dataset": {
+    "filas": 3390,
+    "columnas": 17,
+    "nulos_celda": 510,
+    "filas_con_nulos": 463,
+    "duplicados": 0,
+    "positivos": 511,
+    "pct_positivos": 15.07,
+    "imputados": 510,
+    "winsorizados": 375
+  },
+  "config_dt": {
+    "max_depth": 5,
+    "min_samples_leaf": 1,
+    "criterion": "gini"
+  },
+  "config_rf": {
+    "n_estimators": "300",
+    "max_depth": "5",
+    "max_features": "sqrt",
+    "criterion": "gini",
+    "n_jobs": "-1"
+  },
+  "cv_dt": {
+    "accuracy": 0.8386430678466075,
+    "accuracy_std": 0.003058472176007055,
+    "balanced_accuracy": 0.5275931072513429,
+    "balanced_accuracy_std": 0.014116928820133802,
+    "precision": 0.3394824016563147,
+    "precision_std": 0.06705780094784794,
+    "recall": 0.08227679421283077,
+    "recall_std": 0.031595011693728435,
+    "f1": 0.13170178840767074,
+    "f1_std": 0.04631756552953102,
+    "threshold_opt": 0.2234050173020342,
+    "threshold_opt_std": 0.06897420190190821,
+    "f1_opt": 0.36372353079623837,
+    "f1_opt_std": 0.03449702442781801,
+    "roc_auc": 0.6956259385308694,
+    "roc_auc_std": 0.022133187209611247,
+    "pr_auc": 0.2636638843973993,
+    "pr_auc_std": 0.015405919958005311,
+    "fit_time": 0.06989336442202329,
+    "fit_time_std": 0.00558876939253855,
+    "leaves": 28.4,
+    "leaves_std": 3.646916505762094,
+    "depth": 5.0,
+    "depth_std": 0.0
+  },
+  "cv_rf": {
+    "accuracy": 0.8504424778761063,
+    "accuracy_std": 0.0008078503798011111,
+    "balanced_accuracy": 0.5079364371152991,
+    "balanced_accuracy_std": 0.003870848445304456,
+    "precision": 0.6533333333333333,
+    "precision_std": 0.2062899792902107,
+    "recall": 0.017608985341709498,
+    "recall_std": 0.008191607163551298,
+    "f1": 0.03414535620143097,
+    "f1_std": 0.015467643426282828,
+    "threshold_opt": 0.19477595343984055,
+    "threshold_opt_std": 0.0290021291862329,
+    "f1_opt": 0.3945337590751268,
+    "f1_opt_std": 0.01992637192275558,
+    "roc_auc": 0.7128038148318283,
+    "roc_auc_std": 0.018657992535183056,
+    "pr_auc": 0.32452509296729015,
+    "pr_auc_std": 0.033672997017834126,
+    "fit_time": 1.6022095702006482,
+    "fit_time_std": 0.031051556342598808,
+    "leaves": 29.796,
+    "leaves_std": 0.4536359284222927,
+    "depth": 5.0,
+    "depth_std": 0.0,
+    "oob_accuracy": 0.8498525073746312,
+    "oob_accuracy_std": 0.00048076713902671565
+  },
+  "holdout": {
+    "accuracy": {
+      "Decision Tree": 0.8456243854473943,
+      "Random Forest": 0.8505408062930186
+    },
+    "balanced_accuracy": {
+      "Decision Tree": 0.5245778867102396,
+      "Random Forest": 0.5059572440087146
+    },
+    "precision": {
+      "Decision Tree": 0.4166666666666667,
+      "Random Forest": 0.6666666666666666
+    },
+    "recall": {
+      "Decision Tree": 0.06535947712418301,
+      "Random Forest": 0.013071895424836602
+    },
+    "f1": {
+      "Decision Tree": 0.11299435028248588,
+      "Random Forest": 0.02564102564102564
+    },
+    "threshold_opt": {
+      "Decision Tree": 0.16666666666666666,
+      "Random Forest": 0.19764600699648807
+    },
+    "f1_opt": {
+      "Decision Tree": 0.34920634920634924,
+      "Random Forest": 0.40318302387267907
+    },
+    "roc_auc": {
+      "Decision Tree": 0.6618403534253208,
+      "Random Forest": 0.7211480271120795
+    },
+    "pr_auc": {
+      "Decision Tree": 0.2706723440810305,
+      "Random Forest": 0.33719109408222275
+    },
+    "hojas": {
+      "Decision Tree": 30.0,
+      "Random Forest": 29.286666666666665
+    }
+  },
+  "baseline_mayoritaria": 0.8493,
+  "umbral_optimo": {
+    "Decision Tree": [
+      0.16666666666666666,
+      0.34920634920634924
+    ],
+    "Random Forest": [
+      0.19764600699648807,
+      0.40318302387267907
+    ]
+  }
+}

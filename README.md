@@ -27,7 +27,7 @@ Repositorio: <https://github.com/kahnaisehC/analisis-riesgo-cardiovascular>
 | `data/dataset_procesado.csv` | Dataset limpio, imputado, codificado y con `pulsePressure`. |
 | `data/auditoria_inicial.md` | Informe del dataset antes del pre-procesamiento. |
 | `data/auditoria_preprocesamiento.md` | Informe del dataset después del pre-procesamiento. |
-| `results/` | Tablas CSV de cada experimento y `resumen.json`. |
+| `results/` | Tablas CSV de cada experimento, `resumen.json` y `resumen_notebook.json`. |
 
 ## Cómo correrlo en Google Colab
 

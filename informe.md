@@ -5,7 +5,7 @@
 **Dataset:** `data_cardiovascular_risk.csv` — *Framingham Heart Study*, predicción de
 enfermedad coronaria a 10 años (`TenYearCHD`).
 
-**Integrantes:** _(completar)_
+**Integrantes:** Ian Hakanson, Joaquin Valdez, Lucas Rabinovich
 
 ---
 
@@ -52,10 +52,11 @@ control de que las implementaciones propias son correctas.
 | Entregable | Archivo |
 |---|---|
 | Notebook ejecutable en Colab | `TP_IAD_2026.ipynb` |
+| Notebook con salidas | `TP_IAD_2026_ejecutado.ipynb` |
 | Código fuente documentado | `dt_rf.py`, `preprocessing.py`, `experiments.py`, `plots.py`, `run_experiments.py`, `tune_final.py`, `finalize.py`, `make_figures.py` |
 | Dataset pre-procesado | `data/dataset_procesado.csv` |
-| Informe | `informe.md` (este documento) |
-| Tablas y figuras | `results/*.csv`, `results/resumen.json`, `results/figuras/*.png` |
+| Informe | `informe.md` (este documento) y `informe.pdf` |
+| Tablas y figuras | `results/*.csv`, `results/resumen.json`, `results/resumen_notebook.json`, `results/figuras/*.png` |
 
 ---
 
@@ -728,12 +729,21 @@ entre sistólica y diastólica, que el árbol único no llega a explotar.
 
 ### En Google Colab
 
-1. Subir `TP_IAD_2026.ipynb` a <https://colab.research.google.com>.
-2. Subir también `dt_rf.py`, `preprocessing.py`, `experiments.py` y `plots.py`
-   (la primera celda los pide si faltan).
-3. Ejecutar las celdas en orden; cuando se pida, subir
-   `data_cardiovascular_risk.csv`.
+1. Abrir el notebook directamente desde el repositorio:
+   <https://colab.research.google.com/github/kahnaisehC/analisis-riesgo-cardiovascular/blob/main/TP_IAD_2026.ipynb>.
+2. Hacer *Runtime → Run all*. Colab clona el repositorio, así que los módulos y
+   el CSV ya están presentes.
+3. Si se sube solamente el `.ipynb`, la primera celda (`bootstrap`) descarga de
+   GitHub —sólo si faltan— `dt_rf.py`, `preprocessing.py`, `experiments.py`,
+   `plots.py` y `data_cardiovascular_risk.csv`. La subida manual queda como
+   respaldo ante falta de red.
 4. La sección 12 tiene el panel interactivo con sliders.
+
+El bootstrap fija un `COMMIT` para descargar siempre la misma versión de los
+archivos. La validación cruzada fija la semilla por fold; el modelo final de
+hold-out del notebook no fija `random_state`, por lo que sus cifras pueden
+variar levemente entre ejecuciones (el informe reporta la corrida canónica de
+`run_experiments.py`).
 
 ### Local
 
@@ -765,3 +775,4 @@ jupyter notebook TP_IAD_2026.ipynb
 | `comparacion_final_holdout.csv` | DT vs RF en hold-out |
 | `importancias.csv` | importancia por atributo |
 | `resumen.json` | todas las métricas puntuales del informe |
+| `resumen_notebook.json` | métricas exportadas por el notebook |

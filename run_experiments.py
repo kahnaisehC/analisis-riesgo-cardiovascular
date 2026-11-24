@@ -124,7 +124,7 @@ def main():
         ("DT propio (gini)", DecisionTree(max_depth=6, criterion="gini")),
         ("DT sklearn (entropy)", DecisionTreeClassifier(max_depth=6, criterion="entropy", random_state=0)),
         ("DT sklearn (gini)", DecisionTreeClassifier(max_depth=6, criterion="gini", random_state=0)),
-        ("RF propio", RandomForest(n_estimators=100, max_depth=10, n_jobs=1, random_state=0)),
+        ("RF propio", RandomForest(n_estimators=100, max_depth=10, n_jobs=-1, random_state=0)),
         ("RF sklearn", RandomForestClassifier(n_estimators=100, max_depth=10, n_jobs=-1, random_state=0)),
     ]:
         t0 = time.perf_counter()
@@ -235,7 +235,7 @@ def main():
         E.make_rf, "n_estimators", [10, 25, 50, 100, 200, 300],
         df_raw, TARGET, prep_factory,
         fixed={"max_depth": 12, "criterion": "gini",
-               "n_jobs": 1, "random_state": SEED},
+               "n_jobs": -1, "random_state": SEED},
     )
     _save(trees_df, "rf_barrido_arboles.csv")
 
@@ -243,7 +243,7 @@ def main():
         E.make_rf, "max_features", ["sqrt", "log2", 0.3, 0.6],
         df_raw, TARGET, prep_factory,
         fixed={"n_estimators": 100, "max_depth": 12, "criterion": "gini",
-               "n_jobs": 1, "random_state": SEED},
+               "n_jobs": -1, "random_state": SEED},
     )
     _save(mf_df, "rf_barrido_max_features.csv")
 
@@ -251,7 +251,7 @@ def main():
         E.make_rf, "max_depth", [3, 5, 8, 12, 20, None],
         df_raw, TARGET, prep_factory,
         fixed={"n_estimators": 100, "max_features": "sqrt",
-               "criterion": "gini", "n_jobs": 1, "random_state": SEED},
+               "criterion": "gini", "n_jobs": -1, "random_state": SEED},
     )
     _save(rfdepth_df, "rf_barrido_profundidad.csv")
 
@@ -262,7 +262,7 @@ def main():
             TARGET,
             prep_factory,
             lambda: RandomForest(n_estimators=100, max_depth=12, criterion="gini",
-                                 voting=voting, n_jobs=1, random_state=SEED),
+                                 voting=voting, n_jobs=-1, random_state=SEED),
         )
         res["voting"] = voting
         voting_rows.append(res)
@@ -287,7 +287,7 @@ def main():
     def rf_default():
         return RandomForest(
             n_estimators=80, max_depth=10, criterion="gini",
-            n_jobs=1, random_state=SEED
+            n_jobs=-1, random_state=SEED
         )
 
     ablation_rows = []

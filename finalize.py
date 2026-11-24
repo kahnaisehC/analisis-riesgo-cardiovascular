@@ -59,7 +59,7 @@ def main():
     best_mf = cfg_rf["max_features"]
     if isinstance(best_mf, str) and best_mf.replace(".", "", 1).isdigit():
         best_mf = float(best_mf)
-    cfg_rf = {**cfg_rf, "max_features": best_mf, "n_jobs": 1, "random_state": SEED}
+    cfg_rf = {**cfg_rf, "max_features": best_mf, "n_jobs": -1, "random_state": SEED}
 
     df_raw = pd.read_csv("data_cardiovascular_risk.csv")
     y = df_raw[TARGET].to_numpy()

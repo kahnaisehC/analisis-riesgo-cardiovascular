@@ -38,16 +38,21 @@ Repositorio: <https://github.com/kahnaisehC/analisis-riesgo-cardiovascular>
 Colab clona el repo en el entorno, así que los módulos y el CSV ya están en el
 directorio de trabajo. Sólo hay que hacer *Runtime → Run all*.
 
-**Opción manual:**
+**Opción manual (subir solamente el notebook):**
 
 1. Abrir <https://colab.research.google.com> → *Subir notebook* → `TP_IAD_2026.ipynb`.
-2. Subir al entorno de ejecución los cuatro módulos: `dt_rf.py`,
-   `preprocessing.py`, `experiments.py`, `plots.py` (la primera celda lo pide
-   si no los encuentra).
-3. Correr las celdas en orden. Cuando llegue a la carga del dataset, subir
-   `data_cardiovascular_risk.csv`.
+2. Correr las celdas en orden. La primera celda (`bootstrap`) descarga desde
+   GitHub, **sólo si faltan**, `dt_rf.py`, `preprocessing.py`, `experiments.py`,
+   `plots.py` y `data_cardiovascular_risk.csv`. No hace falta subir nada a mano.
+3. Si no hay acceso a la red, la celda lo avisa y la subida manual aparece
+   cuando el notebook intenta importar los módulos o leer el CSV.
 4. La sección 12 trae un panel con sliders para probar parametrizaciones sin
    editar código.
+
+El bootstrap usa una versión fija del repositorio (constante `COMMIT` en la
+primera celda) para que la ejecución sea reproducible. Si se modifican los
+módulos o el CSV, actualizar ese hash (o usar `main` para seguir siempre la
+última versión).
 
 Todo funciona con las bibliotecas que Colab trae por defecto
 (`numpy`, `pandas`, `matplotlib`, `scikit-learn`, `ipywidgets`). scikit-learn
